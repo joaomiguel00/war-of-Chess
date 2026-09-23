@@ -1,0 +1,30 @@
+{
+  "_leia_me": "Deixe o valor vazio para usar o som sintetizado. Para usar um arquivo seu, coloque-o nesta pasta (public/audio/) e escreva o nome aqui, ex: \"attack_r\": \"toppling-ram.ogg\".",
+
+  "attack_p": "",
+  "attack_r": "",
+  "attack_n": "attack-knight.wav",
+  "attack_b": "attack-bishop.wav",
+  "attack_q": "",
+  "attack_k": "",
+
+  "death_p": "death-hit.wav",
+  "death_r": "death-rook.wav",
+  "death_n": "death-hit.wav",
+  "death_b": "death-hit.wav",
+  "death_q": "death-queen.wav",
+  "death_k": "death-hit.wav",
+
+  "step_p": "",
+  "step_r": "",
+  "step_n": "",
+  "step_b": "",
+  "step_q": "",
+  "step_k": "",
+
+  "music_loop": "music-suspense.mp3",
+
+  "ui_check": "",
+  "ui_victory": "",
+  "ui_click": ""
+}
