@@ -1108,3 +1108,33 @@ h3,
   font-size: 13px;
   letter-spacing: 0.04em;
 }
+
+/* ---------------------------------------------------- clima e clarões */
+
+.scene-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  mix-blend-mode: screen;
+}
+
+.weather-choices {
+  flex-wrap: wrap;
+}
+
+.weather-choice {
+  flex: 1 1 30%;
+  font-size: 12px;
+}
+
+.menu-weather {
+  margin: 14px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.menu-weather strong {
+  color: var(--gold-bright);
+  font-weight: 600;
+}

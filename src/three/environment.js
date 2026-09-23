@@ -2,6 +2,11 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WHITE, BLACK } from '../chess/moveGen.js';
 import { disposeObject } from './animation.js';
+import { getWeather } from './weather.js';
+
+// Céu, névoa, floresta distante, bandeiras e partículas de clima. O terreno,
+// os braseiros, o acampamento e o cemitério ficam em módulos próprios
+// (ver battlefield.js); aqui é só a "atmosfera".
 
 // Os adereços do cenário são estáticos: juntar tudo num mesh só por material
 // derruba centenas de draw calls sem mudar nada visualmente.
@@ -29,65 +34,24 @@ function placed(geometry, { position, rotation, scale }) {
 const ORDER_COLOR = 0xff8c33;
 const RUIN_COLOR = 0xd946ef;
 
-const GROUND_Y = -1.7;
+export const GROUND_Y = -1.7;
 const PLATFORM_TOP = -0.5;
-
-function stoneMaterial(color, roughness = 0.95) {
-  return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0.08, flatShading: true });
-}
 
 // Para o que está longe e quase preto, sombreamento barato basta.
 function distantMaterial(color) {
   return new THREE.MeshLambertMaterial({ color, flatShading: true });
 }
 
-// Plataforma octogonal em dois degraus, sob o tabuleiro.
-function buildPlatform(group) {
-  const tiers = [
-    { radius: 6.6, height: 0.5, y: PLATFORM_TOP - 0.25, color: 0x2a2830 },
-    { radius: 7.6, height: 0.5, y: PLATFORM_TOP - 0.72, color: 0x211f27 },
-    { radius: 8.8, height: 0.6, y: PLATFORM_TOP - 1.25, color: 0x1a181e },
-  ];
-
-  for (const tier of tiers) {
-    const mesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(tier.radius, tier.radius + 0.25, tier.height, 8),
-      stoneMaterial(tier.color),
-    );
-    mesh.position.y = tier.y;
-    mesh.rotation.y = Math.PI / 8;
-    mesh.receiveShadow = true;
-    group.add(mesh);
-  }
-
-  // Blocos soltos na borda, para a silhueta não ficar perfeita demais.
-  const blocks = [];
-  for (let i = 0; i < 22; i++) {
-    const angle = (i / 22) * Math.PI * 2 + Math.random() * 0.1;
-    const radius = 6.9 + Math.random() * 0.5;
-    const size = 0.35 + Math.random() * 0.4;
-    blocks.push(
-      placed(new THREE.BoxGeometry(size, size * 0.6, size * 0.8), {
-        position: new THREE.Vector3(
-          Math.cos(angle) * radius,
-          PLATFORM_TOP - 0.18 - Math.random() * 0.1,
-          Math.sin(angle) * radius,
-        ),
-        rotation: new THREE.Euler(Math.random() * 0.2, angle + Math.random(), Math.random() * 0.2),
-      }),
-    );
-  }
-  mergeInto(group, blocks, stoneMaterial(0x26242c));
+// Os acampamentos ficam atrás de cada exército (eixo Z): ali a mata abre
+// espaço e as árvores só aparecem bem ao fundo.
+function inCampArc(angle) {
+  return Math.abs(Math.sin(angle)) > 0.78;
 }
 
-// Floresta noturna nevada: chão de neve, pinheiros em silhueta, tocos com
-// neve e olhos azuis espreitando na escuridão.
-function buildForest(group) {
-  // Chão de neve azulada; o raio acompanha o alcance da névoa.
-  const ground = new THREE.Mesh(
-    new THREE.CircleGeometry(46, 16),
-    distantMaterial(0x2b2748),
-  );
+// Floresta: chão distante, pinheiros em silhueta, árvores secas e montes.
+function buildForest(group, weather) {
+  const groundMaterial = distantMaterial(weather.ground);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 18), groundMaterial);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = GROUND_Y;
   group.add(ground);
@@ -95,9 +59,8 @@ function buildForest(group) {
   const trunkGeos = [];
   const foliageGeos = [];
   const bareGeos = [];
-  const snowGeos = [];
+  const moundGeos = [];
 
-  // Pinheiro: tronco fino + cones empilhados que estreitam para cima.
   function pineAt(x, z, scale) {
     const trunkH = 0.7 * scale;
     trunkGeos.push(
@@ -121,7 +84,6 @@ function buildForest(group) {
     }
   }
 
-  // Árvore seca: tronco alto e ramos tortos apontando pra cima.
   function bareAt(x, z, scale) {
     const h = (3 + Math.random() * 2.5) * scale;
     bareGeos.push(
@@ -147,10 +109,9 @@ function buildForest(group) {
     }
   }
 
-  // Anel de árvores ao redor da arena, mais densas ao longe.
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < 64; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const radius = 9.5 + Math.random() * 28;
+    const radius = inCampArc(angle) ? 33 + Math.random() * 12 : 13 + Math.random() * 26;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
     const scale = 1 + Math.random() * 1.4 + radius * 0.03;
@@ -158,12 +119,11 @@ function buildForest(group) {
     else bareAt(x, z, scale);
   }
 
-  // Montes de neve e pedras baixas espalhados.
   for (let i = 0; i < 26; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const radius = 8 + Math.random() * 26;
+    const radius = 14 + Math.random() * 24;
     const size = 0.5 + Math.random() * 1.8;
-    snowGeos.push(
+    moundGeos.push(
       placed(new THREE.IcosahedronGeometry(size, 0), {
         position: new THREE.Vector3(
           Math.cos(angle) * radius,
@@ -176,30 +136,32 @@ function buildForest(group) {
     );
   }
 
+  const moundMaterial = distantMaterial(weather.mounds);
   mergeInto(group, trunkGeos, distantMaterial(0x241c2c), { shadows: false });
   mergeInto(group, foliageGeos, distantMaterial(0x1b1730), { shadows: false });
   mergeInto(group, bareGeos, distantMaterial(0x181320), { shadows: false });
-  mergeInto(group, snowGeos, distantMaterial(0x3c3960), { shadows: false });
+  mergeInto(group, moundGeos, moundMaterial, { shadows: false });
+  return { groundMaterial, moundMaterial };
 }
 
-// Olhos azuis brilhando na escuridão da mata.
+// Olhos azuis brilhando na escuridão da mata (só onde é escuro de verdade).
 function buildEyes(group) {
   const eyes = [];
   const material = new THREE.MeshBasicMaterial({ color: 0x74d0ff, toneMapped: false });
   for (let i = 0; i < 9; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = 11 + Math.random() * 16;
+    let angle = Math.random() * Math.PI * 2;
+    if (inCampArc(angle)) angle += Math.PI / 2;
+    const radius = 13 + Math.random() * 14;
     const x = Math.cos(angle) * radius;
     const z = Math.sin(angle) * radius;
     const y = GROUND_Y + 0.7 + Math.random() * 1.4;
     const pair = new THREE.Group();
     for (const side of [-1, 1]) {
       const eye = new THREE.Mesh(new THREE.SphereGeometry(0.06, 6, 6), material);
-      eye.position.set(side * 0.14, 0, 0); // deslocamento local: dois olhos lado a lado
+      eye.position.set(side * 0.14, 0, 0);
       pair.add(eye);
     }
     pair.position.set(x, y, z);
-    // Vira o par para o centro (o tabuleiro), mantendo os olhos lado a lado.
     pair.lookAt(0, y, 0);
     group.add(pair);
     eyes.push({ pair, phase: Math.random() * Math.PI * 2, blinkAt: 2 + Math.random() * 6 });
@@ -208,11 +170,8 @@ function buildEyes(group) {
 }
 
 // Névoa baixa: discos translúcidos girando devagar junto ao chão.
-function buildGroundFog(group) {
-  // Poucas camadas e raios contidos: discos transparentes grandes e
-  // sobrepostos são caros em preenchimento, sobretudo em GPU integrada.
+function buildGroundFog(group, weather) {
   const layers = [];
-  const texture = null;
   for (let i = 0; i < 4; i++) {
     const material = new THREE.MeshBasicMaterial({
       color: 0x6f6a8a,
@@ -220,9 +179,9 @@ function buildGroundFog(group) {
       opacity: 0.08 + Math.random() * 0.06,
       depthWrite: false,
       side: THREE.DoubleSide,
-      map: texture,
     });
-    const radius = 8 + Math.random() * 5;
+    material.color.set(weather.fogColor).lerp(new THREE.Color(0xffffff), 0.25);
+    const radius = 10 + Math.random() * 5;
     const disc = new THREE.Mesh(new THREE.CircleGeometry(radius, 9), material);
     disc.rotation.x = -Math.PI / 2;
     disc.position.set(
@@ -237,56 +196,7 @@ function buildGroundFog(group) {
   return layers;
 }
 
-// Tochas: poste, braseiro, chama facetada e luz que treme.
-function buildTorches(group) {
-  const torches = [];
-  const poleMaterial = stoneMaterial(0x272129, 0.8);
-  const bowlMaterial = new THREE.MeshStandardMaterial({
-    color: 0x6b5a33,
-    roughness: 0.5,
-    metalness: 0.85,
-    flatShading: true,
-  });
-
-  const spots = [
-    [5.4, 5.4],
-    [-5.4, 5.4],
-    [5.4, -5.4],
-    [-5.4, -5.4],
-  ];
-
-  for (const [x, z] of spots) {
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.16, 2.4, 6), poleMaterial);
-    pole.position.set(x, PLATFORM_TOP + 1.2, z);
-    pole.castShadow = true;
-    group.add(pole);
-
-    const bowl = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.16, 0.34, 8), bowlMaterial);
-    bowl.position.set(x, PLATFORM_TOP + 2.5, z);
-    group.add(bowl);
-
-    const flameMaterial = new THREE.MeshBasicMaterial({
-      color: 0xffb257,
-      transparent: true,
-      opacity: 0.92,
-      toneMapped: false,
-    });
-    const flame = new THREE.Mesh(new THREE.IcosahedronGeometry(0.26, 0), flameMaterial);
-    flame.position.set(x, PLATFORM_TOP + 2.82, z);
-    flame.scale.y = 1.6;
-    group.add(flame);
-
-    const light = new THREE.PointLight(0xff9a3c, 14, 16, 2);
-    light.position.set(x, PLATFORM_TOP + 2.9, z);
-    group.add(light);
-
-    torches.push({ flame, flameMaterial, light, phase: Math.random() * Math.PI * 2 });
-  }
-
-  return torches;
-}
-
-// Bandeiras dos dois exércitos, com pano ondulando.
+// Bandeiras dos dois exércitos, com pano ondulando ao vento.
 function buildBanners(group) {
   const banners = [];
   const poleMaterial = new THREE.MeshStandardMaterial({
@@ -296,12 +206,11 @@ function buildBanners(group) {
     flatShading: true,
   });
 
-  // Nos flancos: os jogadores olham o tabuleiro pelo eixo Z, que fica livre.
   const spots = [
-    { x: -7, z: -2.2, color: WHITE },
-    { x: 7, z: -2.2, color: WHITE },
-    { x: -7, z: 2.2, color: BLACK },
-    { x: 7, z: 2.2, color: BLACK },
+    { x: -7.4, z: -2.2, color: WHITE },
+    { x: 7.4, z: -2.2, color: WHITE },
+    { x: -7.4, z: 2.2, color: BLACK },
+    { x: 7.4, z: 2.2, color: BLACK },
   ];
 
   for (const spot of spots) {
@@ -332,7 +241,6 @@ function buildBanners(group) {
     cloth.castShadow = true;
     group.add(cloth);
 
-    // Emblema simples no centro do pano.
     const emblem = new THREE.Mesh(
       new THREE.OctahedronGeometry(0.22, 0),
       new THREE.MeshBasicMaterial({ color: isOrder ? ORDER_COLOR : RUIN_COLOR, toneMapped: false }),
@@ -353,271 +261,284 @@ function buildBanners(group) {
   return banners;
 }
 
-// Poeira suspensa sobre o tabuleiro.
-function buildDust(group) {
-  const count = 420;
+function pointCloud(group, { count, spread, height, bottom, color, size }) {
   const positions = new Float32Array(count * 3);
-  const speeds = new Float32Array(count);
-
   for (let i = 0; i < count; i++) {
-    positions[i * 3] = (Math.random() - 0.5) * 18;
-    positions[i * 3 + 1] = Math.random() * 7 - 1;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 18;
-    speeds[i] = 0.05 + Math.random() * 0.12;
+    positions[i * 3] = (Math.random() - 0.5) * spread;
+    positions[i * 3 + 1] = bottom + Math.random() * height;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * spread;
   }
-
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
   const material = new THREE.PointsMaterial({
-    color: 0xb3a892,
-    size: 0.045,
+    color,
+    size,
     transparent: true,
-    opacity: 0.4,
+    opacity: 0,
     depthWrite: false,
     sizeAttenuation: true,
   });
-
   const points = new THREE.Points(geometry, material);
+  points.visible = false;
   group.add(points);
-  return { points, geometry, material, speeds, count };
+  return { points, geometry, material, count };
 }
 
-// Chuva leve: segmentos verticais que caem e reciclam.
+// Chuva: segmentos que caem e reciclam; o vento inclina os pingos.
 function buildRain(group) {
-  const count = 700;
+  const count = 1100;
   const positions = new Float32Array(count * 6);
   const speeds = new Float32Array(count);
-
   for (let i = 0; i < count; i++) {
     const x = (Math.random() - 0.5) * 26;
     const y = Math.random() * 16;
     const z = (Math.random() - 0.5) * 26;
     const length = 0.25 + Math.random() * 0.3;
-    positions[i * 6] = x;
-    positions[i * 6 + 1] = y;
-    positions[i * 6 + 2] = z;
-    positions[i * 6 + 3] = x;
-    positions[i * 6 + 4] = y - length;
-    positions[i * 6 + 5] = z;
-    speeds[i] = 9 + Math.random() * 7;
+    positions.set([x, y, z, x, y - length, z], i * 6);
+    speeds[i] = 10 + Math.random() * 7;
   }
-
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
   const material = new THREE.LineBasicMaterial({
     color: 0x9fb0cc,
     transparent: true,
     opacity: 0,
     depthWrite: false,
   });
-
   const rain = new THREE.LineSegments(geometry, material);
   rain.visible = false;
   group.add(rain);
   return { rain, geometry, material, speeds, count };
 }
 
-// Neve: flocos que caem devagar balançando de um lado para o outro.
-function buildSnow(group) {
-  const count = 900;
-  const positions = new Float32Array(count * 3);
-  const speeds = new Float32Array(count);
-  const sway = new Float32Array(count);
-
-  for (let i = 0; i < count; i++) {
-    positions[i * 3] = (Math.random() - 0.5) * 34;
-    positions[i * 3 + 1] = Math.random() * 18 + GROUND_Y;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 34;
-    speeds[i] = 0.7 + Math.random() * 1.1;
-    sway[i] = Math.random() * Math.PI * 2;
-  }
-
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-
-  const material = new THREE.PointsMaterial({
-    color: 0xdfe4ff,
-    size: 0.09,
-    transparent: true,
-    opacity: 0,
-    depthWrite: false,
-    sizeAttenuation: true,
-  });
-
-  const snow = new THREE.Points(geometry, material);
-  snow.visible = false;
-  group.add(snow);
-  return { snow, geometry, material, speeds, sway, count };
-}
-
-export function createEnvironment({ scene, lights }) {
+export function createEnvironment({ scene, lights, weather: weatherId, onLightning }) {
+  const weather = getWeather(weatherId);
   const group = new THREE.Group();
   scene.add(group);
 
-  buildPlatform(group);
-  buildForest(group);
-  const eyesLayer = buildEyes(group);
-  const fogLayers = buildGroundFog(group);
-  const torches = buildTorches(group);
-  const banners = buildBanners(group);
-  const dust = buildDust(group);
-  const rain = buildRain(group);
-  const snow = buildSnow(group);
+  // Céu e névoa do clima escolhido.
+  scene.background = new THREE.Color(weather.background);
+  if (scene.fog) {
+    scene.fog.color.set(weather.fogColor);
+    scene.fog.density = weather.fogDensity;
+  }
 
-  // Guarda os valores iniciais para o clima poder evoluir a partir deles.
+  const forest = buildForest(group, weather);
+  const eyesLayer = buildEyes(group);
+  const fogLayers = buildGroundFog(group, weather);
+  const banners = buildBanners(group);
+  const dust = pointCloud(group, { count: 420, spread: 18, height: 7, bottom: -1, color: 0xb3a892, size: 0.045 });
+  const snow = pointCloud(group, { count: 900, spread: 34, height: 18, bottom: GROUND_Y, color: 0xdfe4ff, size: 0.09 });
+  const sand = pointCloud(group, { count: 1600, spread: 34, height: 7, bottom: GROUND_Y, color: 0xc89560, size: 0.075 });
+  const rain = buildRain(group);
+  const dustSpeeds = Float32Array.from({ length: dust.count }, () => 0.05 + Math.random() * 0.12);
+  const snowSpeeds = Float32Array.from({ length: snow.count }, () => 0.7 + Math.random() * 1.1);
+  const snowSway = Float32Array.from({ length: snow.count }, () => Math.random() * Math.PI * 2);
+  const sandSpeeds = Float32Array.from({ length: sand.count }, () => 4 + Math.random() * 5);
+
+  // Olhos só brilham no escuro.
+  eyesLayer.eyes.forEach((e) => (e.pair.visible = weather.darkness > 0.4));
+
+  // Luz dos relâmpagos: fonte própria, então nunca briga com a cena de vitória.
+  // Só existe em clima com raios: cada luz a mais pesa em todo pixel da cena.
+  const lightningLight = weather.lightning ? new THREE.DirectionalLight(0xc8d4ff, 0) : null;
+  if (lightningLight) {
+    lightningLight.position.set(-6, 14, 8);
+    group.add(lightningLight);
+  }
+  const lightning = { next: 4 + Math.random() * 5, age: 99, pulses: [] };
+  const flashColor = new THREE.Color(0x5a6388);
+
   const base = {
+    ambient: lights.ambient.intensity * weather.light.ambient,
+    hemi: lights.hemi.intensity * weather.light.hemi,
+    key: lights.key.intensity * weather.light.key,
+    fill: lights.fill.intensity * weather.light.fill,
+    fogDensity: weather.fogDensity,
+    background: new THREE.Color(weather.background),
+  };
+  const original = {
     ambient: lights.ambient.intensity,
     hemi: lights.hemi.intensity,
     key: lights.key.intensity,
     fill: lights.fill.intensity,
-    fogDensity: scene.fog ? scene.fog.density : 0.035,
-    background: scene.background ? scene.background.clone() : new THREE.Color(0x1a0f2e),
   };
-  // A tempestade de neve escurece o roxo do céu.
-  const darkBackground = new THREE.Color(0x0d0819);
+  const darkBackground = new THREE.Color(weather.background).multiplyScalar(0.45);
+  const currentBackground = new THREE.Color();
 
   let progress = 0;
   let rainLevel = 0;
   let snowLevel = 0;
+  let sandLevel = 0;
+  let flash = 0;
   let elapsed = 0;
 
   // progress: 0 no início da partida, 1 quando o massacre já aconteceu.
   function setProgress(value) {
     progress = Math.min(1, Math.max(0, value));
-    // Já neva de leve desde o começo e engrossa rápido com as capturas.
-    snowLevel = Math.min(1, 0.2 + progress * 1.1);
-    // A chuva/aguaceiro gelado só entra na reta final, por cima da neve.
-    rainLevel = Math.min(1, Math.max(0, (progress - 0.7) / 0.3));
+    snowLevel = weather.snow > 0 ? Math.min(1, weather.snow + progress * 1.1) : 0;
+    const late = weather.lateRain ? Math.min(1, Math.max(0, (progress - 0.7) / 0.3)) : 0;
+    rainLevel = Math.min(1, weather.rain + late + (weather.rain > 0 ? progress * 0.15 : 0));
+    sandLevel = weather.sand > 0 ? Math.min(1, weather.sand * (0.75 + progress * 0.25)) : 0;
 
     lights.ambient.intensity = base.ambient * (1 - 0.4 * progress);
     lights.hemi.intensity = base.hemi * (1 - 0.55 * progress);
     lights.key.intensity = base.key * (1 - 0.5 * progress);
     lights.fill.intensity = base.fill * (1 - 0.45 * progress);
 
-    if (scene.fog) scene.fog.density = base.fogDensity + 0.03 * progress;
-    if (scene.background?.copy) {
-      scene.background.copy(base.background).lerp(darkBackground, progress);
-    }
+    if (scene.fog) scene.fog.density = base.fogDensity + 0.025 * progress;
+    currentBackground.copy(base.background).lerp(darkBackground, progress);
+    scene.background.copy(currentBackground);
 
-    for (const torch of torches) {
-      // As tochas ganham peso relativo conforme o resto escurece.
-      torch.light.distance = 16 + progress * 5;
-      torch.baseIntensity = 14 + progress * 10;
-    }
-
-    snow.material.opacity = 0.35 + snowLevel * 0.5;
-    snow.snow.visible = true;
-
-    rain.material.opacity = rainLevel * 0.3;
+    snow.material.opacity = snowLevel > 0 ? 0.35 + snowLevel * 0.5 : 0;
+    snow.points.visible = snowLevel > 0.01;
+    rain.material.opacity = rainLevel * 0.32;
     rain.rain.visible = rainLevel > 0.01;
+    sand.material.opacity = sandLevel * 0.5;
+    sand.points.visible = sandLevel > 0.01;
+    dust.material.opacity = weather.dust * (1 - snowLevel * 0.6);
+    dust.points.visible = weather.dust > 0.01;
+  }
 
-    dust.material.opacity = 0.4 * (1 - snowLevel * 0.6);
+  function updateLightning(dt) {
+    if (!weather.lightning) return;
+    lightning.next -= dt;
+    lightning.age += dt;
+    if (lightning.next <= 0) {
+      lightning.next = 6 + Math.random() * 10;
+      lightning.age = 0;
+      // Duas ou três piscadas, a primeira mais forte.
+      lightning.pulses = [0, 0.09 + Math.random() * 0.05, 0.24 + Math.random() * 0.1]
+        .slice(0, 2 + Math.round(Math.random()))
+        .map((at, i) => ({ at, power: i === 0 ? 1 : 0.5 + Math.random() * 0.4 }));
+      lightningLight.position.set((Math.random() - 0.5) * 24, 14, (Math.random() - 0.5) * 24);
+      onLightning?.(0.4 + Math.random() * 0.6);
+    }
+    flash = 0;
+    for (const pulse of lightning.pulses) {
+      const t = lightning.age - pulse.at;
+      if (t >= 0 && t < 0.35) flash = Math.max(flash, pulse.power * Math.exp(-t * 14));
+    }
+    lightningLight.intensity = flash * 7;
+    if (flash > 0.002) scene.background.copy(currentBackground).lerp(flashColor, flash * 0.7);
+    else if (lightning.age < 1) scene.background.copy(currentBackground);
   }
 
   function update(dt) {
     elapsed += dt;
+    const wind = weather.wind;
 
     for (const layer of fogLayers) {
-      layer.disc.rotation.z += layer.speed * dt;
+      layer.disc.rotation.z += layer.speed * dt * (1 + wind * 3);
       layer.material.opacity =
-        layer.baseOpacity * (0.75 + 0.25 * Math.sin(elapsed * 0.3 + layer.speed * 10)) * (1 + progress * 0.8);
+        layer.baseOpacity *
+        weather.groundFog *
+        (0.75 + 0.25 * Math.sin(elapsed * 0.3 + layer.speed * 10)) *
+        (1 + progress * 0.8);
     }
 
-    for (const torch of torches) {
-      const flicker = 0.78 + Math.random() * 0.22 + Math.sin(elapsed * 9 + torch.phase) * 0.08;
-      torch.light.intensity = (torch.baseIntensity ?? 14) * flicker;
-      torch.flame.scale.set(0.9 + flicker * 0.18, 1.35 + flicker * 0.4, 0.9 + flicker * 0.18);
-      torch.flame.rotation.y += dt * 1.6;
-      torch.flameMaterial.opacity = 0.8 + flicker * 0.18;
-    }
-
+    // Bandeiras: vento forte = pano batendo rápido e largo.
+    const waveSpeed = 1.6 + wind * 3;
+    const waveSize = 0.08 + wind * 0.16;
     for (const banner of banners) {
       const position = banner.cloth.geometry.attributes.position;
       const array = position.array;
       for (let i = 0; i < array.length; i += 3) {
         const x = banner.basePositions[i];
         const y = banner.basePositions[i + 1];
-        // O pano ondula mais na ponta livre, longe do mastro.
-        // Ondula mais na ponta solta, longe do mastro.
         const grip = (x * banner.grip + 0.48) / 0.95;
         array[i + 2] =
-          Math.sin(elapsed * 2.4 + x * 3 + banner.phase) * 0.14 * grip +
-          Math.sin(elapsed * 1.3 + y * 2) * 0.05 * grip;
+          Math.sin(elapsed * waveSpeed + x * 3 + banner.phase) * waveSize * grip +
+          Math.sin(elapsed * waveSpeed * 0.55 + y * 2) * waveSize * 0.35 * grip;
       }
       position.needsUpdate = true;
       banner.emblem.position.x =
-        banner.cloth.position.x + Math.sin(elapsed * 2.4 + banner.phase) * 0.07;
+        banner.cloth.position.x + Math.sin(elapsed * waveSpeed + banner.phase) * waveSize * 0.5;
     }
 
-    const dustArray = dust.geometry.attributes.position.array;
-    for (let i = 0; i < dust.count; i++) {
-      const index = i * 3;
-      dustArray[index + 1] += dust.speeds[i] * dt;
-      dustArray[index] += Math.sin(elapsed * 0.4 + i) * 0.004;
-      if (dustArray[index + 1] > 6.5) {
-        dustArray[index + 1] = -1;
-        dustArray[index] = (Math.random() - 0.5) * 18;
-        dustArray[index + 2] = (Math.random() - 0.5) * 18;
+    if (dust.points.visible) {
+      const a = dust.geometry.attributes.position.array;
+      for (let i = 0; i < dust.count; i++) {
+        const k = i * 3;
+        a[k + 1] += dustSpeeds[i] * dt;
+        a[k] += Math.sin(elapsed * 0.4 + i) * 0.004 + wind * dt * 0.6;
+        if (a[k + 1] > 6.5 || a[k] > 9) {
+          a[k + 1] = -1;
+          a[k] = (Math.random() - 0.5) * 18;
+          a[k + 2] = (Math.random() - 0.5) * 18;
+        }
       }
+      dust.geometry.attributes.position.needsUpdate = true;
     }
-    dust.geometry.attributes.position.needsUpdate = true;
 
-    // Neve: cai devagar e balança; recicla ao tocar o chão.
-    if (snow.snow.visible) {
-      const snowArray = snow.geometry.attributes.position.array;
+    if (snow.points.visible) {
+      const a = snow.geometry.attributes.position.array;
       for (let i = 0; i < snow.count; i++) {
-        const index = i * 3;
-        snowArray[index + 1] -= snow.speeds[i] * dt;
-        snowArray[index] += Math.sin(elapsed * 0.8 + snow.sway[i]) * 0.01;
-        if (snowArray[index + 1] < GROUND_Y) {
-          snowArray[index] = (Math.random() - 0.5) * 34;
-          snowArray[index + 1] = 17 + Math.random() * 2;
-          snowArray[index + 2] = (Math.random() - 0.5) * 34;
+        const k = i * 3;
+        a[k + 1] -= snowSpeeds[i] * dt;
+        a[k] += Math.sin(elapsed * 0.8 + snowSway[i]) * 0.01 + wind * dt * 0.9;
+        if (a[k + 1] < GROUND_Y) {
+          a[k] = (Math.random() - 0.5) * 34;
+          a[k + 1] = 17 + Math.random() * 2;
+          a[k + 2] = (Math.random() - 0.5) * 34;
         }
       }
       snow.geometry.attributes.position.needsUpdate = true;
     }
 
-    // Olhos que brilham e piscam de vez em quando.
+    // Areia: corre na horizontal, rodopia e recicla do outro lado.
+    if (sand.points.visible) {
+      const a = sand.geometry.attributes.position.array;
+      for (let i = 0; i < sand.count; i++) {
+        const k = i * 3;
+        a[k] += sandSpeeds[i] * dt;
+        a[k + 1] += Math.sin(elapsed * 2.1 + i * 0.37) * dt * 0.6;
+        a[k + 2] += Math.cos(elapsed * 1.3 + i) * dt * 0.8;
+        if (a[k] > 17) {
+          a[k] = -17;
+          a[k + 1] = GROUND_Y + Math.random() * 7;
+          a[k + 2] = (Math.random() - 0.5) * 34;
+        }
+      }
+      sand.geometry.attributes.position.needsUpdate = true;
+    }
+
     for (const e of eyesLayer.eyes) {
       const t = (elapsed + e.phase) % e.blinkAt;
-      // Pisca rápido perto do fim do ciclo.
       const open = t > e.blinkAt - 0.16 ? Math.abs(Math.sin((t - (e.blinkAt - 0.16)) * 20)) : 1;
       e.pair.scale.y = 0.2 + open * 0.8;
     }
 
     if (rain.rain.visible) {
-      const rainArray = rain.geometry.attributes.position.array;
+      const a = rain.geometry.attributes.position.array;
+      const slant = wind * 0.22;
       for (let i = 0; i < rain.count; i++) {
-        const index = i * 6;
+        const k = i * 6;
         const fall = rain.speeds[i] * dt;
-        rainArray[index + 1] -= fall;
-        rainArray[index + 4] -= fall;
-        if (rainArray[index + 4] < GROUND_Y) {
-          const x = (Math.random() - 0.5) * 26;
+        a[k + 1] -= fall;
+        a[k + 4] -= fall;
+        a[k] += fall * slant;
+        a[k + 3] += fall * slant;
+        if (a[k + 4] < GROUND_Y) {
+          const x = (Math.random() - 0.5) * 26 - slant * 8;
           const z = (Math.random() - 0.5) * 26;
-          const length = 0.25 + Math.random() * 0.3;
-          rainArray[index] = x;
-          rainArray[index + 1] = 15 + Math.random() * 3;
-          rainArray[index + 2] = z;
-          rainArray[index + 3] = x;
-          rainArray[index + 4] = rainArray[index + 1] - length;
-          rainArray[index + 5] = z;
+          const length = 0.3 + Math.random() * 0.35;
+          const y = 15 + Math.random() * 3;
+          a.set([x, y, z, x - length * slant, y - length, z], k);
         }
       }
       rain.geometry.attributes.position.needsUpdate = true;
     }
+
+    updateLightning(dt);
   }
 
   function dispose() {
     disposeObject(group);
-    lights.ambient.intensity = base.ambient;
-    lights.hemi.intensity = base.hemi;
-    lights.key.intensity = base.key;
-    lights.fill.intensity = base.fill;
-    if (scene.fog) scene.fog.density = base.fogDensity;
+    lights.ambient.intensity = original.ambient;
+    lights.hemi.intensity = original.hemi;
+    lights.key.intensity = original.key;
+    lights.fill.intensity = original.fill;
   }
 
   setProgress(0);
@@ -627,11 +548,16 @@ export function createEnvironment({ scene, lights }) {
     update,
     dispose,
     group,
+    weather,
     get progress() {
       return progress;
     },
     get rainLevel() {
       return rainLevel;
+    },
+    // 0..1 enquanto um relâmpago ilumina o céu.
+    get flash() {
+      return flash;
     },
   };
 }

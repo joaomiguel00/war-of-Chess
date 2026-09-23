@@ -168,7 +168,12 @@ export function makePieceFromGLB(type, color) {
   const body = new THREE.Group();
   body.name = 'Body';
   // Montado com o glTF ainda sem pai, para as juntas saírem no espaço do modelo.
-  if (cfg.walk) rigWalker(model, body, cfg.walk);
+  if (cfg.walk) {
+    const rig = rigWalker(model, body, cfg.walk);
+    // Sinal da rotação X que ergue o braço para a frente: o modelo girado
+    // 180° (rei) olha para -Z no próprio espaço, então o sinal inverte.
+    rig.raiseSign = cfg.yaw ? 1 : -1;
+  }
   cfg.setup?.(model);
 
   const oriented = new THREE.Group();

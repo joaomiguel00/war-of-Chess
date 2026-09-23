@@ -13,6 +13,26 @@ export function getTimeScale() {
   return timeScale;
 }
 
+// Hit-stop: congela as animações de ação por alguns milissegundos reais no
+// instante do impacto. Independe da câmera lenta (não mexe em timeScale).
+let freezeUntil = 0;
+const FROZEN_SCALE = 0.015;
+
+export function hitStop(ms) {
+  freezeUntil = Math.max(freezeUntil, performance.now() + ms);
+}
+
+// Velocidade de inspeção (console): window.xadrez.velocidade(0.2) deixa as
+// animações de ação em câmera lenta para conferir quadro a quadro.
+let debugSpeed = 1;
+export function setDebugSpeed(value) {
+  debugSpeed = Math.max(0.01, Number(value) || 1);
+}
+
+function scaleAt(now) {
+  return (now < freezeUntil ? FROZEN_SCALE : timeScale) * debugSpeed;
+}
+
 // Executa uma animação por quadro; resolve quando termina.
 // `scaled: false` ignora a câmera lenta (usado pela própria câmera).
 export function animate(duration, onFrame, { scaled = true } = {}) {
@@ -21,7 +41,7 @@ export function animate(duration, onFrame, { scaled = true } = {}) {
     let last = performance.now();
 
     function step(now) {
-      elapsed += (now - last) * (scaled ? timeScale : 1);
+      elapsed += (now - last) * (scaled ? scaleAt(now) : 1);
       last = now;
       const t = Math.min(1, elapsed / duration);
       onFrame(t);

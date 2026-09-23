@@ -11,7 +11,9 @@ import { createClock, formatClock } from './clock.js';
 import { computeTitles } from './achievements.js';
 import { settings, setSetting } from './settings.js';
 import { audio } from './audio/index.js';
+import { WEATHERS, WEATHER_ORDER, getWeather } from './three/weather.js';
 import { createCaptureTester } from './debug.js';
+import { setDebugSpeed } from './three/animation.js';
 
 const uiRoot = document.getElementById('ui-root');
 const canvasContainer = document.getElementById('canvas-container');
@@ -43,6 +45,7 @@ function destroyMatch() {
     gameView.dispose();
     gameView = null;
     audio.stopMusic();
+    audio.stopAmbience();
   }
   canvasContainer.style.display = 'none';
 }
@@ -84,6 +87,7 @@ function showStartMenu() {
           </button>
         </div>
         <button class="btn btn-ghost btn-wide" id="btn-options">Opções</button>
+        <p class="menu-weather">Clima da batalha: <strong>${getWeather(settings.weather).label}</strong> · mude em Opções</p>
       </div>
     </div>
   `;
@@ -166,16 +170,37 @@ function showOptions(onBack) {
           </div>
         </div>
 
+        <div class="option-clock">
+          <span class="option-text"><strong>Clima da batalha</strong><em id="weather-hint">${getWeather(settings.weather).hint}</em></span>
+          <div class="clock-choices weather-choices" id="weather-choices">
+            ${WEATHER_ORDER.map(
+              (id) =>
+                `<button type="button" class="clock-choice weather-choice ${getWeather(settings.weather).id === id ? 'is-on' : ''}" data-weather="${id}">${WEATHERS[id].label}</button>`,
+            ).join('')}
+          </div>
+        </div>
+
         <button class="btn btn-primary btn-wide" id="btn-back">Voltar</button>
       </div>
     </div>
   `;
 
-  uiRoot.querySelectorAll('.clock-choice').forEach((button) => {
+  uiRoot.querySelectorAll('.weather-choice').forEach((button) => {
+    button.onclick = () => {
+      setSetting('weather', button.dataset.weather);
+      uiRoot
+        .querySelectorAll('.weather-choice')
+        .forEach((b) => b.classList.toggle('is-on', b === button));
+      uiRoot.querySelector('#weather-hint').textContent = getWeather(button.dataset.weather).hint;
+      audio.playUi('click');
+    };
+  });
+
+  uiRoot.querySelectorAll('.clock-choice:not(.weather-choice)').forEach((button) => {
     button.onclick = () => {
       setSetting('clockMinutes', Number(button.dataset.min));
       uiRoot
-        .querySelectorAll('.clock-choice')
+        .querySelectorAll('.clock-choice:not(.weather-choice)')
         .forEach((b) => b.classList.toggle('is-on', b === button));
       audio.playUi('click');
     };
@@ -559,6 +584,7 @@ async function launchMatch(board, withReveal, opts = {}) {
   await preloadPieceModels();
 
   audio.startMusic();
+  audio.startAmbience(settings.weather);
 
   const game = new ChessGame(board);
   const clock = createClock(settings.clockMinutes);
@@ -590,10 +616,20 @@ async function launchMatch(board, withReveal, opts = {}) {
 
   if (withReveal) await gameView.playRevealAnimation();
 
+  // Corneta de guerra: o combate começa oficialmente aqui.
+  await gameView.playBattleStart();
+  if (!gameView) return;
+
   gameView.startClock();
 
   // Expõe o estado para depuração no console do navegador.
-  window.xadrez = { game, gameView, audio, testarCaptura: createCaptureTester(() => window.xadrez) };
+  window.xadrez = {
+    game,
+    gameView,
+    audio,
+    testarCaptura: createCaptureTester(() => window.xadrez),
+    velocidade: setDebugSpeed,
+  };
 }
 
 function renderHUD(game) {

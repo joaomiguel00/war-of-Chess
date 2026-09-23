@@ -140,6 +140,11 @@ export function hasWalkRig(piece) {
   return !!findRig(piece);
 }
 
+// Rig da peça (corpo, pernas, braços) para as animações de ataque; null sem rig.
+export function getRig(piece) {
+  return findRig(piece);
+}
+
 const smoothstep = (e0, e1, x) => {
   const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)));
   return t * t * (3 - 2 * t);

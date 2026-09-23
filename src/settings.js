@@ -10,6 +10,8 @@ const defaults = {
   muted: false,
   // Relógio de xadrez: minutos por jogador. 0 = desativado (sem limite).
   clockMinutes: 0,
+  // Clima da partida (ver three/weather.js).
+  weather: 'neve',
 };
 
 function load() {

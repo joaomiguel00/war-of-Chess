@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { WHITE } from '../chess/moveGen.js';
-import { walkTo } from './pieceAnimator.js';
+import { walkTo, getRig } from './pieceAnimator.js';
+import { getAttack } from './attacks/index.js';
+import { dustPuff, impactBurst, simulateDebris, restingSpots, reserveLights } from './fx.js';
 import {
   animate,
   wait,
@@ -9,10 +11,12 @@ import {
   easeInOut,
   fadeOut,
   findPart,
+  forEachMaterial,
   horizontalDir,
   reparentKeepingWorld,
   tipQuaternion,
   disposeObject,
+  hitStop,
 } from './animation.js';
 
 export const GLOW_COLOR = { [WHITE]: 0xff8c33, b: 0xd946ef };
@@ -20,419 +24,6 @@ export const GLOW_COLOR = { [WHITE]: 0xff8c33, b: 0xd946ef };
 // Peso do impacto por tipo de peça destruída: peças maiores geram um golpe
 // mais forte (clarão maior, mais faíscas e mais tremor).
 const IMPACT_POWER = { p: 0.65, n: 1, b: 0.9, r: 1.35, q: 1.25, k: 1.6 };
-
-/* ------------------------------------------------------------ efeitos */
-
-function setXZ(mesh, from, to, t) {
-  mesh.position.x = from.x + (to.x - from.x) * t;
-  mesh.position.z = from.z + (to.z - from.z) * t;
-}
-
-// Anel de choque rente ao chão, que se abre e some.
-function shockRing(fx, position, color, { radius = 0.85, duration = 520 } = {}) {
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.55,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  const ring = new THREE.Mesh(new THREE.RingGeometry(0.18, 0.26, 20), material);
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.set(position.x, 0.03, position.z);
-  fx.add(ring);
-
-  animate(duration, (t) => {
-    const scale = 1 + easeOut(t) * radius * 3;
-    ring.scale.set(scale, scale, scale);
-    material.opacity = 0.55 * (1 - t);
-  }).then(() => disposeObject(ring));
-}
-
-// Baforada de poeira: bolhas claras que sobem e se dissipam.
-function dustPuff(fx, position, { count = 7, spread = 0.3, duration = 750 } = {}) {
-  const puffs = [];
-  for (let i = 0; i < count; i++) {
-    const material = new THREE.MeshBasicMaterial({
-      color: 0x8a8175,
-      transparent: true,
-      opacity: 0.3,
-      depthWrite: false,
-    });
-    const puff = new THREE.Mesh(new THREE.IcosahedronGeometry(0.09 + Math.random() * 0.07, 0), material);
-    const angle = Math.random() * Math.PI * 2;
-    const distance = Math.random() * spread;
-    puff.position.set(
-      position.x + Math.cos(angle) * distance,
-      0.06 + Math.random() * 0.1,
-      position.z + Math.sin(angle) * distance,
-    );
-    fx.add(puff);
-    puffs.push({
-      puff,
-      material,
-      drift: new THREE.Vector3(Math.cos(angle) * 0.35, 0.3 + Math.random() * 0.25, Math.sin(angle) * 0.35),
-    });
-  }
-
-  animate(duration, (t) => {
-    for (const entry of puffs) {
-      const e = easeOut(t);
-      entry.puff.position.x += entry.drift.x * 0.006;
-      entry.puff.position.y += entry.drift.y * 0.006;
-      entry.puff.position.z += entry.drift.z * 0.006;
-      entry.puff.scale.setScalar(1 + e * 1.6);
-      entry.material.opacity = 0.3 * (1 - t);
-    }
-  }).then(() => puffs.forEach((entry) => disposeObject(entry.puff)));
-}
-
-// Feixe de energia entre dois pontos (ataque do bispo).
-function energyBeam(fx, start, end, color) {
-  const direction = new THREE.Vector3().subVectors(end, start);
-  const length = direction.length();
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.9,
-    depthWrite: false,
-  });
-  const beam = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 6, 1, true), material);
-  beam.position.copy(start).addScaledVector(direction, 0.5);
-  beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
-  beam.scale.set(0.001, length, 0.001);
-  fx.add(beam);
-
-  return {
-    grow: (t) => {
-      const width = 0.02 + easeOut(t) * 0.055;
-      beam.scale.set(width, length, width);
-    },
-    fade: (t) => {
-      material.opacity = 0.9 * (1 - t);
-      const width = (0.075 + t * 0.06);
-      beam.scale.set(width, length, width);
-    },
-    dispose: () => disposeObject(beam),
-  };
-}
-
-// Clarão aditivo no ponto do impacto: uma esfera brilhante que estoura e
-// some depressa. Independe do ângulo da câmera.
-function impactFlash(fx, position, color, { power = 1, y = 0.45 } = {}) {
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.95,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
-  const flash = new THREE.Mesh(new THREE.SphereGeometry(0.22 + power * 0.14, 12, 12), material);
-  flash.position.set(position.x, y, position.z);
-  fx.add(flash);
-
-  animate(240, (t) => {
-    flash.scale.setScalar(0.5 + easeOut(t) * (1.4 + power));
-    material.opacity = 0.95 * (1 - t);
-  }).then(() => disposeObject(flash));
-}
-
-// Faíscas: estilhaços brilhantes que voam do impacto e caem com física.
-function sparks(fx, position, color, { count = 14, power = 1, y = 0.42 } = {}) {
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 1,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  });
-  const bits = [];
-  for (let i = 0; i < count; i++) {
-    const size = 0.02 + Math.random() * 0.028;
-    const bit = new THREE.Mesh(new THREE.TetrahedronGeometry(size, 0), material);
-    bit.position.set(position.x, y, position.z);
-    fx.add(bit);
-    const angle = Math.random() * Math.PI * 2;
-    const speed = (1.3 + Math.random() * 1.9) * power;
-    bits.push({
-      object: bit,
-      floor: 0.02,
-      velocity: new THREE.Vector3(
-        Math.cos(angle) * speed,
-        1.1 + Math.random() * 2.4 * power,
-        Math.sin(angle) * speed,
-      ),
-      spin: new THREE.Vector3(Math.random() * 12 - 6, Math.random() * 12 - 6, Math.random() * 12 - 6),
-    });
-  }
-
-  simulateDebris(bits, 680, { gravity: 15, bounce: 0.18 }).then(async () => {
-    await Promise.all(
-      bits.map((b) => animate(200, (t) => b.object.scale.setScalar(Math.max(0.01, 1 - t)))),
-    );
-    bits.forEach((b) => disposeObject(b.object));
-    material.dispose();
-  });
-}
-
-// Estouro completo de impacto: clarão + faíscas, com força pelo tipo de peça.
-function impactBurst(fx, position, color, power = 1) {
-  impactFlash(fx, position, color, { power });
-  sparks(fx, position, color, { count: Math.round(10 + power * 9), power });
-}
-
-// Arco do golpe giratório da rainha.
-function slashArc(fx, position, color) {
-  const material = new THREE.MeshBasicMaterial({
-    color,
-    transparent: true,
-    opacity: 0.7,
-    depthWrite: false,
-    side: THREE.DoubleSide,
-  });
-  const arc = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.035, 4, 16, Math.PI * 1.3), material);
-  arc.rotation.x = -Math.PI / 2;
-  arc.position.set(position.x, 0.5, position.z);
-  fx.add(arc);
-
-  animate(420, (t) => {
-    arc.rotation.z = t * Math.PI * 2.4;
-    arc.scale.setScalar(1 + t * 0.7);
-    arc.position.y = 0.5 + t * 0.25;
-    material.opacity = 0.7 * (1 - t);
-  }).then(() => disposeObject(arc));
-}
-
-/* ---------------------------------------------------- física simples */
-
-// Integra queda, quique e atrito para cacos/pedaços soltos.
-function simulateDebris(pieces, duration, { gravity = 11, bounce = 0.32 } = {}) {
-  let previous = 0;
-  return animate(duration, (t) => {
-    const dt = Math.min(0.05, (t - previous) * (duration / 1000));
-    previous = t;
-    if (dt <= 0) return;
-
-    for (const item of pieces) {
-      item.velocity.y -= gravity * dt;
-      item.object.position.addScaledVector(item.velocity, dt);
-      item.object.rotation.x += item.spin.x * dt;
-      item.object.rotation.y += item.spin.y * dt;
-      item.object.rotation.z += item.spin.z * dt;
-
-      if (item.object.position.y <= item.floor) {
-        item.object.position.y = item.floor;
-        if (Math.abs(item.velocity.y) > 0.4) {
-          item.velocity.y = -item.velocity.y * bounce;
-          item.velocity.x *= 0.7;
-          item.velocity.z *= 0.7;
-          item.spin.multiplyScalar(0.5);
-        } else {
-          item.velocity.set(0, 0, 0);
-          item.spin.multiplyScalar(0.82);
-        }
-      }
-    }
-  });
-}
-
-function restingSpots(pieces, limit) {
-  return pieces
-    .slice(0, limit)
-    .map((item) => ({ x: item.object.position.x, z: item.object.position.z }));
-}
-
-/* ------------------------------------------------------------ ataques */
-
-// Cada ataque recebe a peça já posicionada em `from` e deve terminar
-// exatamente em `to`, com rotação e escala restauradas.
-async function attackPawn(ctx) {
-  const { mesh, from, to, onImpact, fx } = ctx;
-  const baseRotation = mesh.rotation.clone();
-
-  await animate(200, (t) => {
-    setXZ(mesh, from, to, easeOut(t) * 0.5);
-    mesh.rotation.x = baseRotation.x + 0.12 * t;
-  });
-
-  // Pancada de escudo: gira o ombro e avança rápido.
-  await animate(140, (t) => {
-    setXZ(mesh, from, to, 0.5 + easeIn(t) * 0.45);
-    mesh.rotation.y = baseRotation.y - 0.55 * Math.sin(Math.PI * t);
-    mesh.position.y = Math.sin(Math.PI * t) * 0.07;
-  });
-
-  onImpact();
-  dustPuff(fx, to, { count: 4, spread: 0.2, duration: 550 });
-
-  await animate(240, (t) => {
-    setXZ(mesh, from, to, 0.95 + 0.05 * easeOut(t));
-    mesh.rotation.x = baseRotation.x + 0.12 * (1 - easeOut(t));
-    mesh.rotation.y = baseRotation.y;
-    mesh.position.y = 0;
-  });
-}
-
-async function attackRook(ctx) {
-  const { mesh, from, to, onImpact, fx } = ctx;
-  const baseRotation = mesh.rotation.clone();
-
-  // Recua para tomar impulso.
-  await animate(250, (t) => {
-    setXZ(mesh, from, to, -0.2 * easeOut(t));
-    mesh.rotation.x = baseRotation.x - 0.13 * easeOut(t);
-  });
-
-  // Aríete: investida reta e pesada.
-  await animate(170, (t) => {
-    setXZ(mesh, from, to, -0.2 + 1.17 * easeIn(t));
-    mesh.rotation.x = baseRotation.x - 0.13 + 0.26 * easeIn(t);
-  });
-
-  onImpact();
-  shockRing(fx, to, 0x9b7b46, { radius: 0.9 });
-  dustPuff(fx, to, { count: 8, spread: 0.36 });
-
-  // Freada: a pedra assenta com um baque.
-  await animate(260, (t) => {
-    setXZ(mesh, from, to, 0.97 + 0.03 * easeOut(t));
-    mesh.scale.y = 1 - 0.14 * Math.sin(Math.PI * t);
-    mesh.rotation.x = baseRotation.x + 0.13 * (1 - easeOut(t));
-  });
-  mesh.scale.set(1, 1, 1);
-}
-
-async function attackKnight(ctx) {
-  const { mesh, from, to, onImpact, fx } = ctx;
-  const baseRotation = mesh.rotation.clone();
-  let hit = false;
-
-  await animate(150, (t) => {
-    mesh.scale.y = 1 - 0.14 * easeOut(t);
-  });
-
-  // Salto por cima da vítima, pisoteando na aterrissagem.
-  await animate(440, (t) => {
-    setXZ(mesh, from, to, easeInOut(t));
-    mesh.position.y = Math.sin(Math.PI * t) * 1.15;
-    mesh.rotation.x = baseRotation.x + 0.4 * Math.sin(Math.PI * t);
-    mesh.scale.y = 1 + 0.12 * Math.sin(Math.PI * t);
-    if (t > 0.84 && !hit) {
-      hit = true;
-      onImpact();
-    }
-  });
-
-  shockRing(fx, to, 0x8a8175, { radius: 0.7 });
-  dustPuff(fx, to, { count: 9, spread: 0.4 });
-
-  await animate(240, (t) => {
-    mesh.position.set(to.x, 0, to.z);
-    mesh.rotation.x = baseRotation.x;
-    mesh.scale.y = 1 - 0.2 * Math.sin(Math.PI * t);
-  });
-  mesh.scale.set(1, 1, 1);
-}
-
-async function attackBishop(ctx) {
-  const { mesh, from, to, victimPos, onImpact, fx, glowColor } = ctx;
-
-  // Ergue-se e concentra energia no cajado.
-  await animate(260, (t) => {
-    mesh.position.y = 0.14 * easeOut(t);
-  });
-
-  const staff = findPart(mesh, 'staff');
-  const origin = staff
-    ? staff.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.5, 0))
-    : new THREE.Vector3(from.x, 1.3, from.z);
-  const target = new THREE.Vector3(victimPos.x, 0.5, victimPos.z);
-
-  const beam = energyBeam(fx, origin, target, glowColor);
-  await animate(170, (t) => beam.grow(t));
-
-  onImpact();
-
-  await animate(260, (t) => beam.fade(t));
-  beam.dispose();
-
-  // Vai até a casa: caminhando, se o modelo tiver pernas; senão, flutuando.
-  const walk = walkTo(mesh, to);
-  if (walk) {
-    await walk;
-  } else {
-    await animate(340, (t) => {
-      setXZ(mesh, from, to, easeInOut(t));
-      mesh.position.y = 0.14 * (1 - easeInOut(t));
-    });
-  }
-  mesh.position.y = 0;
-}
-
-async function attackQueen(ctx) {
-  const { mesh, from, to, onImpact, fx, glowColor } = ctx;
-  const baseRotation = mesh.rotation.clone();
-  let hit = false;
-
-  // Golpe giratório: atravessa a casa rodopiando.
-  await animate(580, (t) => {
-    setXZ(mesh, from, to, easeInOut(t));
-    mesh.position.y = Math.sin(Math.PI * t) * 0.3;
-    mesh.rotation.y = baseRotation.y + t * Math.PI * 6;
-    if (t > 0.7 && !hit) {
-      hit = true;
-      onImpact();
-      slashArc(fx, to, glowColor);
-    }
-  });
-
-  mesh.rotation.y = baseRotation.y;
-  mesh.position.y = 0;
-
-  await animate(200, (t) => {
-    mesh.scale.y = 1 - 0.09 * Math.sin(Math.PI * t);
-  });
-  mesh.scale.set(1, 1, 1);
-}
-
-async function attackKing(ctx) {
-  const { mesh, from, to, onImpact, fx, glowColor } = ctx;
-  const baseRotation = mesh.rotation.clone();
-
-  // Prepara o peso do corpo.
-  await animate(300, (t) => {
-    setXZ(mesh, from, to, -0.12 * easeOut(t));
-    mesh.rotation.x = baseRotation.x - 0.18 * easeOut(t);
-    mesh.scale.y = 1 - 0.06 * easeOut(t);
-  });
-
-  // Investida pesada.
-  await animate(280, (t) => {
-    setXZ(mesh, from, to, -0.12 + 1.09 * easeIn(t));
-    mesh.rotation.x = baseRotation.x - 0.18 + 0.46 * easeIn(t);
-    mesh.scale.y = 1 - 0.06 + 0.06 * t;
-  });
-
-  onImpact();
-  shockRing(fx, to, glowColor, { radius: 1.2, duration: 650 });
-  dustPuff(fx, to, { count: 10, spread: 0.45 });
-
-  await animate(300, (t) => {
-    setXZ(mesh, from, to, 0.97 + 0.03 * easeOut(t));
-    mesh.rotation.x = baseRotation.x + 0.28 * (1 - easeOut(t));
-  });
-  mesh.rotation.copy(baseRotation);
-  mesh.scale.set(1, 1, 1);
-}
-
-const ATTACKS = {
-  p: attackPawn,
-  r: attackRook,
-  n: attackKnight,
-  b: attackBishop,
-  q: attackQueen,
-  k: attackKing,
-};
 
 /* -------------------------------------------------------------- mortes */
 
@@ -711,11 +302,53 @@ const DEATHS = {
   k: deathKing,
 };
 
+// Esmagada pela torre: achata de uma vez, estilhaça e some.
+async function deathCrushed(ctx) {
+  const { mesh, fx, position } = ctx;
+  const start = mesh.scale.clone();
+  await animate(110, (t) => {
+    const e = easeOut(t);
+    mesh.scale.set(start.x * (1 + 0.35 * e), start.y * (1 - 0.78 * e), start.z * (1 + 0.35 * e));
+  });
+  dustPuff(fx, position, { count: 8, spread: 0.4, duration: 900 });
+  await wait(260);
+  ctx.reportDebris(
+    Array.from({ length: 4 }, () => ({
+      x: position.x + (Math.random() - 0.5) * 0.7,
+      z: position.z + (Math.random() - 0.5) * 0.7,
+    })),
+  );
+  await fadeOut(mesh, 420);
+}
+
+// Dissolvida pela luz do bispo: a vítima brilha em dourado enquanto cai.
+function withDissolve(death, color) {
+  return async (ctx) => {
+    const tint = new THREE.Color(color);
+    const entries = [];
+    forEachMaterial(ctx.mesh, (m) => {
+      if (m.emissive) entries.push({ m, from: m.emissive.clone(), intensity: m.emissiveIntensity ?? 1 });
+    });
+    const glow = animate(900, (t) => {
+      const level = Math.sin(Math.PI * Math.min(1, t * 1.4)) * 0.9 + t * 0.4;
+      for (const e of entries) {
+        e.m.emissive.copy(e.from).lerp(tint, Math.min(1, level));
+        e.m.emissiveIntensity = e.intensity + level * 2.5;
+      }
+    });
+    await Promise.all([death(ctx), glow]);
+  };
+}
+
 /* ---------------------------------------------------------- orquestração */
 
-export function createCombat({ scene, decals, audio, shake }) {
+// hooks opcionais: shake(força), flash(cor, força, ms) e cinematic (follow,
+// slowMo). O replay de destaques cria o combate sem eles.
+export function createCombat({ scene, decals, audio, shake, flash, cinematic, lightPool = 0 }) {
   const fx = new THREE.Group();
   scene.add(fx);
+  if (lightPool) reserveLights(fx, lightPool);
+  const middle = new THREE.Vector3();
 
   async function playCapture({
     attacker,
@@ -731,19 +364,22 @@ export function createCombat({ scene, decals, audio, shake }) {
     onVictimGone,
   }) {
     const dir = horizontalDir(from, victimPos);
-    let death = Promise.resolve();
+    const teamColor = GLOW_COLOR[attackerColor] ?? GLOW_COLOR.b;
+    const baseYaw = attacker.rotation.y;
+    attacker.rotation.order = 'YXZ';
+    let death = null;
 
-    const runDeath = () => {
-      // Estouro de impacto no exato momento do golpe.
-      const power = IMPACT_POWER[victimType] ?? 1;
-      impactBurst(fx, victimPos, GLOW_COLOR[attackerColor] ?? GLOW_COLOR.b, power);
-      shake?.(0.3 + power * 0.16);
-
+    // Início da morte da vítima (uma vez só), no estilo pedido pelo ataque.
+    const kill = (style = 'default') => {
+      if (death) return;
+      const typeDeath = DEATHS[victimType] ?? DEATHS.p;
+      const runner =
+        style === 'crush' ? deathCrushed : style === 'dissolve' ? withDissolve(typeDeath, 0xffcf5a) : typeDeath;
       audio?.playDeath(victimType);
-      death = DEATHS[victimType]({
+      death = runner({
         mesh: victim,
         fx,
-        position: victimPos,
+        position: victim.position.clone(),
         dir,
         glowColor: GLOW_COLOR[victimColor] ?? GLOW_COLOR.b,
         stoneColor: victimColor === WHITE ? 0x7c7a76 : 0x1f1d26,
@@ -754,24 +390,69 @@ export function createCombat({ scene, decals, audio, shake }) {
             debrisSpots: spots,
           });
         },
-      }).then(() => {
-        onVictimGone?.(victim);
-      });
+      }).then(() => onVictimGone?.(victim));
     };
 
-    audio?.playAttack(attackerType);
-    await ATTACKS[attackerType]({
+    // O instante do golpe: som de impacto, estouro, tremor e câmera lenta.
+    const strike = ({ power, shake: amount, color, kill: doKill = true, style, burst = true } = {}) => {
+      const weight = power ?? IMPACT_POWER[victimType] ?? 1;
+      audio?.playImpact?.(attackerType);
+      if (burst) impactBurst(fx, victim.position, color ?? teamColor, weight);
+      shake?.(amount ?? 0.3 + weight * 0.16);
+      cinematic?.slowMo?.(520);
+      if (doKill) kill(style);
+    };
+
+    const ctx = {
       mesh: attacker,
+      type: attackerType,
+      color: attackerColor,
       from,
       to,
+      victim,
       victimPos,
+      victimType,
+      dir,
       fx,
-      glowColor: GLOW_COLOR[attackerColor] ?? GLOW_COLOR.b,
-      onImpact: runDeath,
-    });
+      teamColor,
+      rig: getRig(attacker),
+      baseYaw,
+      strike,
+      kill,
+      hitStop,
+      shake: (value) => shake?.(value),
+      flash: (color, strength, ms) => flash?.(color, strength, ms),
+      sound: {
+        windup: () => audio?.playWindup?.(attackerType),
+        bash: () => audio?.playImpact?.('p_bash'),
+        step: () => audio?.playStep?.('r'),
+      },
+    };
 
+    // A câmera acompanha o meio do caminho entre atacante e vítima.
+    cinematic?.follow?.(() => middle.addVectors(attacker.position, victim.position).multiplyScalar(0.5));
+
+    const attack = getAttack(attackerType);
+    if (attack) await attack(ctx);
+    kill();
     await death;
+    cinematic?.follow?.(null);
+
+    // Ocupa a casa conquistada (quando o ataque parou antes dela).
+    if (Math.hypot(attacker.position.x - to.x, attacker.position.z - to.z) > 0.02) {
+      const walk = walkTo(attacker, to);
+      if (walk) await walk;
+      else {
+        const start = attacker.position.clone();
+        await animate(240, (t) => {
+          const e = easeInOut(t);
+          attacker.position.x = start.x + (to.x - start.x) * e;
+          attacker.position.z = start.z + (to.z - start.z) * e;
+        });
+      }
+    }
     attacker.position.set(to.x, 0, to.z);
+    attacker.rotation.set(0, baseYaw, 0);
   }
 
   // Xeque-mate: o rei derrotado se ajoelha e fica assim no tabuleiro.

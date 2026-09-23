@@ -21,7 +21,8 @@ export function createBoardScene(container) {
     0.1,
     100,
   );
-  camera.position.set(0, 9.5, -8.5);
+  // Um pouco mais baixa: o horizonte (e o acampamento inimigo) entra no quadro.
+  camera.position.set(0, 7.9, -9.9);
 
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));

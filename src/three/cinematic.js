@@ -3,13 +3,19 @@ import { animate, easeInOut, setTimeScale } from './animation.js';
 import { settings } from '../settings.js';
 
 const SLOW_SCALE = 0.45;
-const SLOW_WINDOW_MS = 1300;
+const FOLLOW_RATE = 7; // quão rápido o enquadramento persegue a ação (1/s)
 
-// Câmera cinematográfica das capturas: aproxima em câmera lenta, segura o
-// golpe por um instante e devolve a câmera exatamente onde estava.
+// Câmera cinematográfica das capturas: aproxima em três quartos, acompanha a
+// ação enquanto o ataque acontece (o plano inteiro desliza junto com o ponto
+// de interesse), aplica câmera lenta só em volta do impacto e devolve a
+// câmera exatamente onde estava.
 export function createCinematic({ camera, controls }) {
   let saved = null;
   let slowTimer = null;
+  let followFn = null;
+  let followRaf = 0;
+  const desired = new THREE.Vector3();
+  const delta = new THREE.Vector3();
 
   function enabled() {
     return settings.cinematic;
@@ -29,13 +35,34 @@ export function createCinematic({ camera, controls }) {
       .multiplyScalar(0.5)
       .setY(0.55);
 
+    // Ataques longos pedem um plano mais aberto para caber os dois.
+    const span = Math.hypot(victimPos.x - attackerPos.x, victimPos.z - attackerPos.z);
+    const open = Math.min(1.6, Math.max(0, span - 1.5) * 0.3);
     const position = target
       .clone()
-      .addScaledVector(side, 2.1)
-      .addScaledVector(direction, -1.5)
-      .setY(1.75);
+      .addScaledVector(side, 2.1 + open)
+      .addScaledVector(direction, -1.5 - open * 0.6)
+      .setY(1.75 + open * 0.5);
 
     return { position, target };
+  }
+
+  function followLoop() {
+    if (!saved) {
+      followRaf = 0;
+      return;
+    }
+    if (followFn) {
+      const point = followFn();
+      if (point) {
+        desired.set(point.x, 0.55, point.z);
+        delta.subVectors(desired, controls.target).multiplyScalar(Math.min(1, FOLLOW_RATE / 60));
+        controls.target.add(delta);
+        camera.position.add(delta);
+        camera.lookAt(controls.target);
+      }
+    }
+    followRaf = requestAnimationFrame(followLoop);
   }
 
   async function start(attackerPos, victimPos) {
@@ -50,7 +77,6 @@ export function createCinematic({ camera, controls }) {
     const shot = shotFor(attackerPos, victimPos);
     controls.enabled = false;
 
-    // A aproximação corre em tempo real; só a ação fica lenta.
     const fromPosition = camera.position.clone();
     const fromTarget = controls.target.clone();
     await animate(
@@ -63,15 +89,26 @@ export function createCinematic({ camera, controls }) {
       },
       { scaled: false },
     );
+    if (!followRaf) followRaf = requestAnimationFrame(followLoop);
+  }
 
-    setTimeScale(SLOW_SCALE);
+  // O enquadramento passa a perseguir o ponto devolvido por fn (por quadro).
+  function follow(fn) {
+    followFn = fn;
+  }
+
+  // Câmera lenta curta em volta do impacto (só com a câmera cinematográfica).
+  function slowMo(ms = 600, scale = SLOW_SCALE) {
+    if (!saved) return;
+    setTimeScale(scale);
     clearTimeout(slowTimer);
-    slowTimer = setTimeout(() => setTimeScale(1), SLOW_WINDOW_MS);
+    slowTimer = setTimeout(() => setTimeScale(1), ms);
   }
 
   async function end() {
     clearTimeout(slowTimer);
     setTimeScale(1);
+    followFn = null;
     if (!saved) return;
 
     const back = saved;
@@ -113,6 +150,9 @@ export function createCinematic({ camera, controls }) {
   function cancel() {
     clearTimeout(slowTimer);
     setTimeScale(1);
+    followFn = null;
+    cancelAnimationFrame(followRaf);
+    followRaf = 0;
     if (saved) {
       camera.position.copy(saved.position);
       controls.target.copy(saved.target);
@@ -121,5 +161,17 @@ export function createCinematic({ camera, controls }) {
     }
   }
 
-  return { start, end, flyTo, cancel, enabled, shotFor };
+  return {
+    start,
+    end,
+    follow,
+    slowMo,
+    flyTo,
+    cancel,
+    enabled,
+    shotFor,
+    get active() {
+      return !!saved;
+    },
+  };
 }

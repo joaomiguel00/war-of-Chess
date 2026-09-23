@@ -6,6 +6,8 @@ import { createCameraRig } from './cameraRig.js';
 import { createDecalLayer } from './decals.js';
 import { createCombat } from './combat.js';
 import { createEnvironment } from './environment.js';
+import { createBattlefield } from './world/battlefield.js';
+import { getWeather } from './weather.js';
 import { createCinematic } from './cinematic.js';
 import { createSpecialFx } from './specialFx.js';
 import { createReplay, scoreMoment, pickHighlights } from './replay.js';
@@ -22,6 +24,8 @@ import { audio } from '../audio/index.js';
 // A partir de quantas capturas o clima chega ao ponto mais sombrio (nevasca).
 // Mais baixo = a mudança de clima acontece mais rápido.
 const MOOD_FULL_AT = 8;
+// Capturas para a destruição em volta do tabuleiro chegar ao máximo.
+const DESTRUCTION_FULL_AT = 14;
 
 const key = (row, col) => `${row},${col}`;
 
@@ -54,17 +58,29 @@ export class GameView {
     this._replayPromotion = 'q';
     this._musicPhase = null;
 
+    this.weather = getWeather(callbacks.weather ?? settings.weather);
     this.highlights = createHighlightLayer(this.scene);
     this.cameraRig = createCameraRig(this.camera, this.controls);
     this.decals = createDecalLayer(this.scene);
+    this.cinematic = createCinematic({ camera: this.camera, controls: this.controls });
+    this._setupFlash();
     this.combat = createCombat({
       scene: this.scene,
       decals: this.decals,
       audio,
       shake: (amount) => this._addShake(amount),
+      flash: (color, strength, ms) => this.flash(color, strength, ms),
+      cinematic: this.cinematic,
+      lightPool: 1,
     });
-    this.environment = createEnvironment({ scene: this.scene, lights: scene.lights });
-    this.cinematic = createCinematic({ camera: this.camera, controls: this.controls });
+    this.environment = createEnvironment({
+      scene: this.scene,
+      lights: scene.lights,
+      weather: this.weather.id,
+      // O trovão chega depois do clarão; quanto mais longe, maior o atraso.
+      onLightning: (power) => audio.playThunder(power, (1 - power) * 1.8),
+    });
+    this.battlefield = createBattlefield({ scene: this.scene, camera: this.camera, weather: this.weather });
     this.specialFx = createSpecialFx({ scene: this.scene });
     this.replay = createReplay({
       scene: this.scene,
@@ -125,6 +141,8 @@ export class GameView {
     this.elapsed += dt;
 
     this.environment.update(dt);
+    this.battlefield.update(dt, { lightning: this.environment.flash });
+    this._updateFlash(dt);
     this._updateAliveMotion();
     // Fita de LED: destaca o lado de quem joga (ou de quem venceu) e pulsa no xeque.
     this.boardLights.update(dt, {
@@ -153,6 +171,72 @@ export class GameView {
     if (shaken) this.camera.position.sub(this._shakeOffset);
 
     requestAnimationFrame(this._loop);
+  }
+
+  // Clarão de cena inteira: luz ambiente colorida + véu na tela.
+  _setupFlash() {
+    this._flashLight = new THREE.AmbientLight(0xffffff, 0);
+    this.scene.add(this._flashLight);
+    this._flashOverlay = document.createElement('div');
+    this._flashOverlay.className = 'scene-flash';
+    this.container.appendChild(this._flashOverlay);
+    this._flash = null;
+  }
+
+  flash(color = 0xffffff, strength = 0.5, ms = 300) {
+    this._flash = { color: new THREE.Color(color), strength, ms, age: 0 };
+    this._flashLight.color.copy(this._flash.color);
+    this._flashOverlay.style.background = `radial-gradient(ellipse at center, #${this._flash.color.getHexString()} 0%, transparent 75%)`;
+  }
+
+  _updateFlash(dt) {
+    if (!this._flash) return;
+    this._flash.age += dt * 1000;
+    const t = this._flash.age / this._flash.ms;
+    if (t >= 1) {
+      this._flash = null;
+      this._flashLight.intensity = 0;
+      this._flashOverlay.style.opacity = '0';
+      return;
+    }
+    // Sobe quase na hora e decai rápido.
+    const k = this._flash.strength * (t < 0.12 ? t / 0.12 : Math.pow(1 - (t - 0.12) / 0.88, 2));
+    this._flashLight.intensity = k * 5;
+    this._flashOverlay.style.opacity = String(k * 0.85);
+  }
+
+  // Início do combate: corneta e tambores, labareda nos braseiros, clarão e
+  // um leve avanço da câmera — marcado de uma vez só, no começo da partida.
+  async playBattleStart() {
+    this.busy = true;
+    audio.playWarHorn();
+    this.battlefield.flareUp(1);
+    this.flash(0xffa24a, 0.32, 700);
+    this._addShake(0.18);
+    setTimeout(() => {
+      if (this.disposed) return;
+      this.battlefield.flareUp(1);
+      this.flash(0xffc070, 0.45, 800);
+      this._addShake(0.3);
+    }, 1000);
+
+    const target = this.controls.target.clone();
+    const offset = this.camera.position.clone().sub(target);
+    const enabled = this.controls.enabled;
+    this.controls.enabled = false;
+    await animate(
+      1900,
+      (t) => {
+        const push = 1 - 0.1 * Math.sin(Math.PI * Math.min(1, t * 1.15));
+        this.camera.position.copy(target).addScaledVector(offset, push);
+        this.camera.lookAt(target);
+      },
+      { scaled: false },
+    );
+    if (this.disposed) return;
+    this.camera.position.copy(target).add(offset);
+    this.controls.enabled = enabled;
+    this.busy = false;
   }
 
   // Acumula "trauma" de tremor (0..1). Impactos maiores somam mais.
@@ -208,6 +292,11 @@ export class GameView {
   _updateMood() {
     const captured = this.game.captured.w.length + this.game.captured.b.length;
     this.environment.setProgress(captured / MOOD_FULL_AT);
+    // O campo de batalha fica mais castigado a cada baixa e no fim da partida.
+    const finale = this.game.status === STATUS.CHECKMATE ? 0.25 : 0;
+    const destruction = Math.min(1, captured / DESTRUCTION_FULL_AT + finale);
+    this.battlefield.setDestruction(destruction);
+    audio.setBattleLevel(destruction);
     audio.setMood(this.environment.progress, this.environment.rainLevel);
     this._updateMusicPhase();
   }
@@ -445,7 +534,11 @@ export class GameView {
           victimColor: victimPiece.color,
           victimPos: squareToWorld(victimSquare.row, victimSquare.col),
           victimSquare,
-          onVictimGone: (dead) => this.pieceGroup.remove(dead),
+          // A baixa sai do tabuleiro e vai para o cemitério do seu exército.
+          onVictimGone: (dead) => {
+            this.pieceGroup.remove(dead);
+            this.battlefield.bury({ type: victimPiece.type, color: victimPiece.color });
+          },
         }),
       );
     } else {
@@ -603,6 +696,7 @@ export class GameView {
     this.legalMoves = [];
     this.highlights.clear();
     this.decals.clear();
+    this.battlefield.reset();
 
     this.game = new ChessGame(cloneBoard(this.initialBoard));
     this._buildPieces();
@@ -701,7 +795,9 @@ export class GameView {
     this.replay.dispose();
     this.victory.dispose();
     this.decals.clear();
+    this.battlefield.dispose();
     this.environment.dispose();
+    this._flashOverlay.remove();
     this._disposeScene();
   }
 }

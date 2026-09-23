@@ -7,6 +7,7 @@ export function createAudioEngine() {
   let master = null;
   let musicBus = null;
   let sfxBus = null;
+  let ambienceBus = null;
   let noiseBuffer = null;
   const samples = new Map();
   let loading = Promise.resolve();
@@ -74,6 +75,10 @@ export function createAudioEngine() {
       sfxBus = ctx.createGain();
       sfxBus.gain.value = 1;
       sfxBus.connect(master);
+      // Ambiente (vento, corvos, fogueira, trovão): barramento próprio, baixo.
+      ambienceBus = ctx.createGain();
+      ambienceBus.gain.value = 0.8;
+      ambienceBus.connect(master);
       noiseBuffer = createNoiseBuffer();
       applyVolume();
       loading = loadManifest();
@@ -82,7 +87,27 @@ export function createAudioEngine() {
     return ctx;
   }
 
-  function playSample(id, { gain = 1, rate = 1 } = {}) {
+  // Instante (s) do pico de volume do sample: com fromPeak o som começa ali,
+  // para o golpe do arquivo cair no quadro exato do impacto.
+  const peaks = new Map();
+  function peakOffset(id, buffer) {
+    if (!peaks.has(id)) {
+      const data = buffer.getChannelData(0);
+      let best = 0;
+      let at = 0;
+      for (let i = 0; i < data.length; i += 16) {
+        const v = Math.abs(data[i]);
+        if (v > best) {
+          best = v;
+          at = i;
+        }
+      }
+      peaks.set(id, Math.max(0, at / buffer.sampleRate - 0.02));
+    }
+    return peaks.get(id);
+  }
+
+  function playSample(id, { gain = 1, rate = 1, fromPeak = false } = {}) {
     const buffer = samples.get(id);
     if (!buffer || !ctx) return false;
     const source = ctx.createBufferSource();
@@ -91,7 +116,7 @@ export function createAudioEngine() {
     const volume = ctx.createGain();
     volume.gain.value = gain;
     source.connect(volume).connect(sfxBus);
-    source.start();
+    source.start(0, fromPeak ? peakOffset(id, buffer) : 0);
     return true;
   }
 
@@ -115,6 +140,9 @@ export function createAudioEngine() {
     },
     get musicBus() {
       return musicBus;
+    },
+    get ambienceBus() {
+      return ambienceBus;
     },
     get noiseBuffer() {
       return noiseBuffer;
