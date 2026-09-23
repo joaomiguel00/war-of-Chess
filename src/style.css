@@ -1138,3 +1138,460 @@ h3,
   color: var(--gold-bright);
   font-weight: 600;
 }
+
+/* ---------------------------------------------------- arauto de batalha */
+
+.herald-stage {
+  position: absolute;
+  top: 88px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(760px, 92vw);
+  height: 0;
+  pointer-events: none;
+  z-index: 18;
+}
+
+.herald {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  font-family: 'Cinzel', Georgia, serif;
+  letter-spacing: 0.08em;
+  text-align: center;
+  color: var(--text);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9), 0 0 24px rgba(0, 0, 0, 0.7);
+  animation: herald-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.herald.is-leaving {
+  animation: herald-out 0.42s ease both;
+}
+
+.herald-text {
+  font-size: clamp(16px, 2.2vw, 22px);
+}
+
+.herald-rule {
+  flex: 0 1 90px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(240, 205, 122, 0.8), transparent);
+}
+
+.herald-minor .herald-text {
+  font-size: clamp(14px, 1.8vw, 18px);
+  color: var(--text-dim);
+}
+
+.herald-major .herald-text,
+.herald-mate .herald-text {
+  font-size: clamp(22px, 3.4vw, 34px);
+  font-weight: 700;
+  color: var(--gold-bright);
+  text-shadow: 0 0 28px rgba(201, 162, 75, 0.55), 0 2px 10px rgba(0, 0, 0, 0.9);
+}
+
+.herald-danger .herald-text {
+  color: #ff8a8a;
+  text-shadow: 0 0 22px rgba(255, 40, 60, 0.5), 0 2px 10px rgba(0, 0, 0, 0.9);
+}
+
+.herald-mate .herald-text {
+  font-size: clamp(28px, 4.6vw, 46px);
+  letter-spacing: 0.16em;
+}
+
+@keyframes herald-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.96);
+    filter: blur(4px);
+  }
+}
+
+@keyframes herald-out {
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(3px);
+  }
+}
+
+/* --------------------------------------------- vinheta do batimento */
+
+.danger-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9;
+  opacity: 0;
+  transition: opacity 0.9s ease;
+  background: radial-gradient(ellipse at center, transparent 55%, rgba(170, 0, 20, 0.55) 100%);
+}
+
+.danger-vignette.is-on {
+  opacity: 0.45;
+}
+
+.danger-vignette.is-on.is-beat {
+  animation: heart-pulse var(--beat, 700ms) ease-out;
+}
+
+@keyframes heart-pulse {
+  0% {
+    opacity: 0.45;
+  }
+  12% {
+    opacity: 0.95;
+  }
+  30% {
+    opacity: 0.55;
+  }
+  42% {
+    opacity: 0.8;
+  }
+  100% {
+    opacity: 0.45;
+  }
+}
+
+/* ------------------------------------------------------ abertura */
+
+.skip-intro {
+  position: absolute;
+  right: 22px;
+  bottom: 22px;
+  z-index: 25;
+  flex-direction: row;
+  letter-spacing: 0.12em;
+  animation: herald-in 0.6s 0.4s both;
+}
+
+/* ------------------------------------------------ menu e estandartes */
+
+.menu-row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 14px;
+}
+
+.menu-row .btn {
+  flex: 1 1 140px;
+}
+
+.emblem-inline {
+  vertical-align: -4px;
+  margin: 0 4px;
+}
+
+.emblem-inline.team-w,
+.emblem-row-label.team-w {
+  color: var(--gold-bright);
+}
+
+.emblem-inline.team-b,
+.emblem-row-label.team-b {
+  color: #e9a6f5;
+}
+
+.emblem-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.emblem-row-label {
+  font-family: 'Cinzel', serif;
+  font-size: 12px;
+  text-align: left;
+}
+
+.emblem-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.emblem-choice {
+  width: 36px;
+  height: 36px;
+  padding: 4px;
+  border: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.emblem-choice.is-on {
+  border-color: var(--gold);
+  background: rgba(201, 162, 75, 0.2);
+  color: var(--gold-bright);
+}
+
+.waiting-emblem,
+.victory-emblem {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0 10px;
+  color: var(--gold-bright);
+  filter: drop-shadow(0 0 18px rgba(201, 162, 75, 0.45));
+}
+
+.waiting-emblem.team-b,
+.victory-emblem.team-b {
+  color: #e9a6f5;
+  filter: drop-shadow(0 0 18px rgba(217, 70, 239, 0.45));
+}
+
+.victory-emblem {
+  animation: herald-in 0.8s 0.2s both;
+}
+
+.victory-unlocks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: -12px 0 20px;
+}
+
+.unlock-chip {
+  padding: 8px 12px;
+  border: 1px solid var(--gold);
+  background: rgba(201, 162, 75, 0.12);
+  font-size: 13px;
+  animation: herald-in 0.6s 0.6s both;
+}
+
+/* ------------------------------------------- troféus e vestiário */
+
+.wide-card {
+  max-width: 760px;
+  width: 100%;
+}
+
+.section-title {
+  margin: 26px 0 10px;
+  font-size: 13px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: left;
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+
+.stat-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  border: 1px solid var(--stroke);
+  background: rgba(12, 12, 18, 0.72);
+}
+
+.stat-tile strong {
+  font-family: 'Cinzel', serif;
+  font-size: 26px;
+  color: var(--gold-bright);
+}
+
+.stat-tile span {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.title-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.title-chip {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--stroke);
+  background: rgba(12, 12, 18, 0.72);
+  text-align: left;
+}
+
+.title-chip.is-locked {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
+
+.title-count {
+  font-family: 'Cinzel', serif;
+  color: var(--gold-bright);
+}
+
+.skin-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skin-mini {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--stroke);
+  font-size: 12px;
+}
+
+.skin-swatch {
+  display: inline-flex;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.skin-swatch i {
+  display: block;
+  width: 12px;
+  height: 16px;
+}
+
+.skin-swatch + .skin-swatch {
+  margin-left: 4px;
+}
+
+.muted {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.history-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  text-align: left;
+}
+
+.history-list li {
+  display: grid;
+  grid-template-columns: 90px 90px 1fr;
+  gap: 10px;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 13px;
+}
+
+.history-list li.is-win strong {
+  color: var(--ok);
+}
+
+.history-list li.is-loss strong {
+  color: var(--danger);
+}
+
+.history-list em {
+  font-style: normal;
+  color: var(--text-dim);
+}
+
+.wardrobe-list {
+  display: grid;
+  gap: 8px;
+}
+
+.skin-card {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--stroke);
+  background: rgba(12, 12, 18, 0.72);
+  text-align: left;
+}
+
+.skin-card.is-worn {
+  border-color: var(--gold);
+  box-shadow: 0 0 18px rgba(201, 162, 75, 0.2);
+}
+
+.skin-card.is-locked .skin-glyph,
+.skin-card.is-locked strong {
+  opacity: 0.5;
+}
+
+.skin-glyph {
+  font-size: 32px;
+  color: var(--gold-bright);
+  text-align: center;
+}
+
+.skin-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.skin-info strong {
+  font-family: 'Cinzel', serif;
+  font-size: 14px;
+}
+
+.skin-info em {
+  font-style: normal;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.skin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skin-progress {
+  position: relative;
+  width: 110px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.skin-progress span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(90deg, var(--gold), var(--gold-bright));
+}
+
+.skin-count {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.skin-lock {
+  font-size: 18px;
+  opacity: 0.6;
+}
+
+.skin-card .btn-small {
+  flex-direction: row;
+}
+
+@media (max-width: 720px) {
+  .emblem-row {
+    grid-template-columns: 1fr;
+  }
+  .history-list li {
+    grid-template-columns: 1fr 1fr;
+  }
+}

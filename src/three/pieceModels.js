@@ -599,6 +599,13 @@ export function applyVeteranMark(piece, kills) {
   }
 }
 
+// Decoradores aplicados a toda peça criada (skins, vento nos tecidos...).
+// Cada sistema registra o seu uma vez; a fábrica não conhece nenhum deles.
+const decorators = [];
+export function addPieceDecorator(fn) {
+  if (!decorators.includes(fn)) decorators.push(fn);
+}
+
 export function createPieceMesh(type, color) {
   // Peças com modelo .glb carregado usam o modelo; as demais, o procedural.
   const model = hasPieceModel(type)
@@ -621,5 +628,6 @@ export function createPieceMesh(type, color) {
   piece.userData.pieceType = type;
   piece.userData.pieceColor = color;
 
+  for (const decorate of decorators) decorate(piece, type, color);
   return piece;
 }

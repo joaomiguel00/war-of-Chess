@@ -12,6 +12,17 @@ const defaults = {
   clockMinutes: 0,
   // Clima da partida (ver three/weather.js).
   weather: 'neve',
+  // Tema do campo de batalha (ver three/themes.js), independente do clima.
+  theme: 'acampamento',
+  // Emblemas dos exércitos no hot-seat e o do jogador local no online.
+  emblems: { w: 'aguia', b: 'lobo' },
+  myEmblem: 'coroa',
+  // Cena de abertura antes do primeiro lance.
+  intro: true,
+  // Corte rente ao chão (torre/rei) e câmera lenta de última resistência.
+  cameraFx: true,
+  // Batimento cardíaco, vinheta vermelha e zumbido pós-impacto.
+  intenseFx: true,
 };
 
 function load() {

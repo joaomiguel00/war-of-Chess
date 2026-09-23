@@ -11,6 +11,18 @@ function countPieces(board, color) {
   return n;
 }
 
+// Catálogo fixo dos títulos (para a Sala de Troféus).
+export const TITLE_CATALOG = [
+  { id: 'implacavel', name: 'Implacável', icon: '💀', desc: 'Capturar 8 ou mais peças numa partida.' },
+  { id: 'carrasco', name: 'Carrasco', icon: '⚔️', desc: 'Liderar as capturas da partida (3 ou mais).' },
+  { id: 'estrategista', name: 'Estrategista', icon: '♛', desc: 'Vencer sem perder a rainha.' },
+  { id: 'sobrevivente', name: 'Sobrevivente', icon: '🛡️', desc: 'Vencer com 4 peças ou menos.' },
+  { id: 'agressivo', name: 'Início Agressivo', icon: '🔥', desc: 'Duas capturas nos primeiros lances.' },
+  { id: 'relampago', name: 'Fim Relâmpago', icon: '⚡', desc: 'Vencer em até 10 lances.' },
+  { id: 'relogio', name: 'No Fio do Tempo', icon: '⏳', desc: 'Vencer no relógio.' },
+  { id: 'vitoria', name: 'Vitorioso', icon: '👑', desc: 'Vencer uma partida.' },
+];
+
 // Calcula de 1 a 3 "títulos" leves com base em como a partida se desenrolou.
 // game: a ChessGame terminada. result: { winner, reason }.
 export function computeTitles(game, result = {}) {

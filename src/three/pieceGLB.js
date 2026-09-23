@@ -6,6 +6,7 @@ import { BISHOP_GLB_BASE64 } from './bishopData.js';
 import { QUEEN_GLB_BASE64 } from './queenData.js';
 import { KING_GLB_BASE64 } from './kingData.js';
 import { rigWalker } from './pieceAnimator.js';
+import { rigHead, rigWeapon } from './life/rigParts.js';
 
 // Modelos .glb embutidos em base64 (o host de artifact não serve .glb).
 // Cada um é carregado uma vez e clonado por peça. `scale` leva as unidades do
@@ -175,6 +176,9 @@ export function makePieceFromGLB(type, color) {
     rig.raiseSign = cfg.yaw ? 1 : -1;
   }
   cfg.setup?.(model);
+  // Cabeça que gira no pescoço e arma agrupada (medo, luto, rendição...).
+  rigHead(model, { yawFlipped: !!cfg.yaw });
+  rigWeapon(model);
 
   const oriented = new THREE.Group();
   if (cfg.zUp) oriented.rotation.x = -Math.PI / 2;

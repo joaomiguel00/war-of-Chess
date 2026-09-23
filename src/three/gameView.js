@@ -1,23 +1,28 @@
 import * as THREE from 'three';
 import { createBoardScene, squareToWorld } from './boardScene.js';
 import { createHighlightLayer } from './highlights.js';
-import { createPieceMesh } from './pieceModels.js';
+import { createPieceMesh, applyVeteranMark } from './pieceModels.js';
 import { createCameraRig } from './cameraRig.js';
 import { createDecalLayer } from './decals.js';
 import { createCombat } from './combat.js';
 import { createEnvironment } from './environment.js';
 import { createBattlefield } from './world/battlefield.js';
+import { createActs } from './atmosphere/acts.js';
+import { createDangerEvents } from './atmosphere/dangerEvents.js';
+import { createLife, idlePhase } from './life/index.js';
+import { playOpening } from './cinematics/opening.js';
 import { getWeather } from './weather.js';
+import { getTheme } from './themes.js';
 import { createCinematic } from './cinematic.js';
 import { createSpecialFx } from './specialFx.js';
 import { createReplay, scoreMoment, pickHighlights } from './replay.js';
-import { applyIdleMotion, idlePhase } from './idleMotion.js';
-import { applyVeteranMark } from './pieceModels.js';
 import { createVictoryScene } from './victoryScene.js';
-import { walkTo } from './pieceAnimator.js';
-import { animate, easeInOut, easeOutBack, wait, setTimeScale } from './animation.js';
-import { cloneBoard, findKing, other } from '../chess/moveGen.js';
+import { walkTo, emitStep } from './pieceAnimator.js';
+import { animate, easeInOut, easeOutBack, wait, setTimeScale, setSceneSpeed } from './animation.js';
+import { cloneBoard, findKing, other, isSquareAttacked, WHITE, BLACK } from '../chess/moveGen.js';
 import { STATUS, ChessGame } from '../chess/game.js';
+import { kingDanger, totalPieces, materialLost, isLastStand } from '../chess/analysis.js';
+import { createEmitter } from '../core/events.js';
 import { settings } from '../settings.js';
 import { audio } from '../audio/index.js';
 
@@ -26,14 +31,30 @@ import { audio } from '../audio/index.js';
 const MOOD_FULL_AT = 8;
 // Capturas para a destruição em volta do tabuleiro chegar ao máximo.
 const DESTRUCTION_FULL_AT = 14;
+// Câmera lenta de "última resistência" (fração da velocidade normal).
+const LAST_STAND_SPEED = 0.75;
 
 const key = (row, col) => `${row},${col}`;
 
+// Moral de cada exército a partir do material perdido: só quem está atrás
+// no placar desanima; quem vence mantém o acampamento inteiro.
+function moraleFrom(lost) {
+  const deficit = (side) => Math.min(1, Math.max(0, (lost[side] - lost[other(side)]) / 10));
+  return { w: 1 - 0.78 * deficit(WHITE), b: 1 - 0.78 * deficit(BLACK) };
+}
+
+// Eventos emitidos em this.events (os sistemas de imersão se inscrevem):
+//   boardChanged {game}         moveStart {move, color, pieceType}
+//   capture {square, ...}       victimGone {square, victimType}
+//   attackEnd {attackerType}    moveEnd {game, move}
+//   hover {square, ...}         select {square}
+//   gameOver {result}           reset
 export class GameView {
   constructor(container, game, callbacks = {}) {
     this.container = container;
     this.game = game;
     this.callbacks = callbacks;
+    this.events = createEmitter();
 
     const scene = createBoardScene(container);
     this.scene = scene.scene;
@@ -57,8 +78,12 @@ export class GameView {
     this.replaying = false;
     this._replayPromotion = 'q';
     this._musicPhase = null;
+    // Peças no meio de um lance/ataque: nenhum outro sistema mexe nelas.
+    this.acting = new Set();
 
     this.weather = getWeather(callbacks.weather ?? settings.weather);
+    this.theme = getTheme(callbacks.theme ?? settings.theme);
+    this.emblems = callbacks.emblems ?? settings.emblems;
     this.highlights = createHighlightLayer(this.scene);
     this.cameraRig = createCameraRig(this.camera, this.controls);
     this.decals = createDecalLayer(this.scene);
@@ -77,10 +102,28 @@ export class GameView {
       scene: this.scene,
       lights: scene.lights,
       weather: this.weather.id,
+      theme: this.theme,
       // O trovão chega depois do clarão; quanto mais longe, maior o atraso.
       onLightning: (power) => audio.playThunder(power, (1 - power) * 1.8),
     });
-    this.battlefield = createBattlefield({ scene: this.scene, camera: this.camera, weather: this.weather });
+    this.battlefield = createBattlefield({
+      scene: this.scene,
+      camera: this.camera,
+      weather: this.weather,
+      theme: this.theme,
+      emblems: this.emblems,
+    });
+    this.acts = createActs({ lights: this.lights, renderer: this.renderer, environment: this.environment });
+    this.dangerEvents = createDangerEvents({
+      scene: this.scene,
+      weather: this.weather,
+      environment: this.environment,
+      acts: this.acts,
+      flash: (color, strength, ms) => this.flash(color, strength, ms),
+      shake: (amount) => this._addShake(amount),
+      audio,
+      heightAt: this.battlefield.heightAt,
+    });
     this.specialFx = createSpecialFx({ scene: this.scene });
     this.replay = createReplay({
       scene: this.scene,
@@ -106,6 +149,8 @@ export class GameView {
     this.elapsed = 0;
     this.hovered = null;
     this._hoverAt = 0;
+    this._hoverSquare = null;
+    this._panAt = 0;
     this._shakeTrauma = 0;
     this._shakeOffset = new THREE.Vector3();
 
@@ -117,6 +162,18 @@ export class GameView {
     this.legalMoves = [];
     this.busy = false;
     this.disposed = false;
+    this._remoteQueue = Promise.resolve();
+
+    this.life = createLife({
+      scene: this.scene,
+      events: this.events,
+      getPieces: () => this.pieces,
+      isActing: (piece) => this.acting.has(piece),
+      isSelected: (piece) => !!this.selected && this.pieces.get(key(this.selected.row, this.selected.col)) === piece,
+      getWind: () => this.environment.wind,
+      weather: this.weather,
+      theme: this.theme,
+    });
 
     this._raycaster = new THREE.Raycaster();
     this._pointer = new THREE.Vector2();
@@ -128,6 +185,7 @@ export class GameView {
     this._buildPieces();
     this._renderHighlights();
     this._updateMood();
+    this._syncBoard();
 
     this._lastFrame = performance.now();
     this._loop = this._loop.bind(this);
@@ -140,10 +198,18 @@ export class GameView {
     this._lastFrame = now;
     this.elapsed += dt;
 
+    this.acts.update(dt);
     this.environment.update(dt);
-    this.battlefield.update(dt, { lightning: this.environment.flash });
+    this.battlefield.update(dt, {
+      lightning: this.environment.flash,
+      wind: this.environment.wind,
+      busy: this.busy || this.acting.size > 0,
+    });
+    this.dangerEvents.update(dt);
     this._updateFlash(dt);
-    this._updateAliveMotion();
+    this._updateCheckLight();
+    this.life.update(dt);
+    this._updateSidePan(now);
     // Fita de LED: destaca o lado de quem joga (ou de quem venceu) e pulsa no xeque.
     this.boardLights.update(dt, {
       turn: this.game.isGameOver() && this.game.winner ? this.game.winner : this.game.turn,
@@ -205,6 +271,14 @@ export class GameView {
     this._flashOverlay.style.opacity = String(k * 0.85);
   }
 
+  // Abertura com revelação de escala (pode ser pulada).
+  async playOpening({ isSkipped } = {}) {
+    this.busy = true;
+    this.cameraRig.snapToSide(this.onlineColor ?? this.game.turn);
+    await playOpening({ camera: this.camera, controls: this.controls, scene: this.scene, isSkipped });
+    this.busy = false;
+  }
+
   // Início do combate: corneta e tambores, labareda nos braseiros, clarão e
   // um leve avanço da câmera — marcado de uma vez só, no começo da partida.
   async playBattleStart() {
@@ -261,31 +335,28 @@ export class GameView {
     return true;
   }
 
-  // Respiração das peças + tremor do rei em xeque + pulso da luz de tensão.
-  _updateAliveMotion() {
-    const inCheck =
-      this.game.status === STATUS.CHECK || this.game.status === STATUS.CHECKMATE;
-    let tremblingKey = null;
-
-    if (inCheck) {
-      const king = findKing(this.game.board, this.game.turn);
-      if (king) {
-        tremblingKey = key(king.row, king.col);
-        const position = squareToWorld(king.row, king.col);
-        const pulse = 0.55 + 0.45 * Math.sin(this.elapsed * 7);
-        this.checkLight.visible = true;
-        this.checkLight.position.set(position.x, 1.3, position.z);
-        this.checkLight.intensity = 9 * pulse;
-      }
+  // Pulso da luz vermelha sobre o rei em xeque (o tremor fica com o "medo").
+  _updateCheckLight() {
+    const inCheck = this.game.status === STATUS.CHECK || this.game.status === STATUS.CHECKMATE;
+    const king = inCheck ? findKing(this.game.board, this.game.turn) : null;
+    if (king) {
+      const position = squareToWorld(king.row, king.col);
+      const pulse = 0.55 + 0.45 * Math.sin(this.elapsed * 7);
+      this.checkLight.visible = true;
+      this.checkLight.position.set(position.x, 1.3, position.z);
+      this.checkLight.intensity = 9 * pulse;
     } else if (this.checkLight.visible) {
       this.checkLight.visible = false;
       this.checkLight.intensity = 0;
     }
+  }
 
-    applyIdleMotion(this.pieces, this.elapsed, {
-      tremblingKey,
-      tremble: inCheck ? 1 : 0,
-    });
+  // Posição estéreo de cada acampamento conforme a câmera (5x por segundo).
+  _updateSidePan(now) {
+    if (now - this._panAt < 200) return;
+    this._panAt = now;
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+    audio.setSidePan({ w: -right.z * 0.8, b: right.z * 0.8 });
   }
 
   // O clima acompanha o número de peças já tiradas do tabuleiro.
@@ -301,14 +372,25 @@ export class GameView {
     this._updateMusicPhase();
   }
 
+  // Tudo que depende da posição: atos, perigo dos reis, moral dos
+  // acampamentos, armas caídas e a sombra longa dos braseiros.
+  _syncBoard() {
+    const board = this.game.board;
+    this.battlefield.setBoard(board);
+    this.acts.setPieces(totalPieces(board));
+    for (const color of [WHITE, BLACK]) this.dangerEvents.setDanger(color, kingDanger(board, color));
+    const morale = moraleFrom(materialLost(this.game.captured));
+    this.battlefield.setMorale(morale);
+    audio.setSideMorale(morale);
+    this.battlefield.shadowFocusSide(this.game.turn);
+    this.events.emit('boardChanged', { game: this.game });
+  }
+
   // Trilha dinâmica: calma no começo, tensa no xeque, épica na reta final.
   _updateMusicPhase() {
     const inCheck =
       this.game.status === STATUS.CHECK || this.game.status === STATUS.CHECKMATE;
-    let total = 0;
-    for (let r = 0; r < 8; r++) {
-      for (let c = 0; c < 8; c++) if (this.game.board[r][c]) total++;
-    }
+    const total = totalPieces(this.game.board);
     const phase = inCheck ? 'tense' : total <= 8 ? 'epic' : 'calm';
     if (phase !== this._musicPhase) {
       this._musicPhase = phase;
@@ -320,9 +402,15 @@ export class GameView {
     this.clock?.start(this.game.turn);
   }
 
+  setEmblems(emblems) {
+    this.emblems = emblems;
+    this.battlefield.setEmblems(emblems);
+  }
+
   _buildPieces() {
     this.pieceGroup.clear();
     this.pieces.clear();
+    this.acting.clear();
     for (let r = 0; r < 8; r++) {
       for (let c = 0; c < 8; c++) {
         const piece = this.game.board[r][c];
@@ -343,27 +431,27 @@ export class GameView {
     return mesh;
   }
 
-  // Tooltip de veterano: quantos abates a peça sob o cursor já tem.
+  // Cursor: tooltip de veterano e hesitação sobre casas perigosas.
   _onPointerMove(event) {
-    if (!this.callbacks.onHoverPiece || this.busy) return;
     const now = performance.now();
     if (now - this._hoverAt < 70) return;
     this._hoverAt = now;
+    if (this.busy) return;
 
     const square = this._squareAtPointer(event);
-    const piece = square ? this.game.board[square.row][square.col] : null;
+    const id = square ? key(square.row, square.col) : null;
+    if (id !== this._hoverSquare) {
+      this._hoverSquare = id;
+      this.events.emit('hover', { square, selected: this.selected, legalMoves: this.legalMoves, game: this.game });
+    }
 
+    if (!this.callbacks.onHoverPiece) return;
+    const piece = square ? this.game.board[square.row][square.col] : null;
     if (!piece || !piece.kills) {
       if (this.hovered) {
         this.hovered = null;
         this.callbacks.onHoverPiece(null);
       }
-      return;
-    }
-
-    const id = `${square.row},${square.col}`;
-    if (this.hovered === id) {
-      this.callbacks.onHoverPiece({ piece, x: event.clientX, y: event.clientY });
       return;
     }
     this.hovered = id;
@@ -460,6 +548,8 @@ export class GameView {
       this.selected = null;
       this.legalMoves = [];
     }
+    this._hoverSquare = null;
+    this.events.emit('select', { square: this.selected });
     this._renderHighlights();
   }
 
@@ -477,6 +567,26 @@ export class GameView {
     if (this.game.status === STATUS.CHECK || this.game.status === STATUS.CHECKMATE) {
       const king = findKing(this.game.board, this.game.turn);
       if (king) this.highlights.showCheck(king.row, king.col);
+    }
+  }
+
+  // Lance vindo da rede: entra na fila e só roda quando a cena está livre
+  // (abertura, lance anterior ou corneta ainda em andamento).
+  playRemoteMove(move) {
+    this._remoteQueue = this._remoteQueue
+      .then(async () => {
+        while (this.busy && !this.disposed) await wait(100);
+        if (!this.disposed) await this._playMove(move, { remote: true });
+      })
+      .catch((err) => console.error('[lance remoto]', err));
+    return this._remoteQueue;
+  }
+
+  _act(...meshes) {
+    for (const mesh of meshes) {
+      if (!mesh) continue;
+      this.life.release(mesh);
+      this.acting.add(mesh);
     }
   }
 
@@ -500,61 +610,91 @@ export class GameView {
     const movingPiece = this.game.board[move.from.row][move.from.col];
     const snapshot = cloneBoard(this.game.board);
 
+    // Casa sob ataque inimigo: a peça entra hesitante.
+    const hesitant = isSquareAttacked(this.game.board, move.to.row, move.to.col, other(movingColor));
+    // Última resistência: o lance de quem está encurralado sai em câmera lenta.
+    const lastStand = !this.replaying && settings.cameraFx && isLastStand(this.game.board, movingColor);
+    setSceneSpeed(lastStand ? LAST_STAND_SPEED : 1);
+
     const victimSquare = move.enPassant
       ? { row: move.from.row, col: move.to.col }
       : { row: move.to.row, col: move.to.col };
     const victimKey = key(victimSquare.row, victimSquare.col);
     const victimPiece = this.game.board[victimSquare.row][victimSquare.col];
     const victimMesh = this.pieces.get(victimKey);
+    const fromWorld = squareToWorld(move.from.row, move.from.col);
+    const toWorld = squareToWorld(move.to.row, move.to.col);
+
+    this._act(mesh, victimMesh);
+    this.battlefield.shadowFocusMove(fromWorld, toWorld);
+    this.events.emit('moveStart', { move, color: movingColor, pieceType: movingPiece.type, remote, replaying: this.replaying });
 
     const animations = [];
+    const capturing = victimMesh && victimMesh !== mesh && victimPiece;
 
-    if (victimMesh && victimMesh !== mesh && victimPiece) {
+    if (capturing) {
       this.pieces.delete(victimKey);
-
-      const attackerPos = squareToWorld(move.from.row, move.from.col);
       const victimPos = squareToWorld(victimSquare.row, victimSquare.col);
 
-      await this.cinematic.start(attackerPos, victimPos);
+      await this.cinematic.start(fromWorld, victimPos);
 
       if (move.enPassant) {
         // Ataque furtivo: o vulto corre até a vítima antes do golpe.
-        await this.specialFx.playEnPassant(attackerPos, victimPos, movingPiece.color);
+        await this.specialFx.playEnPassant(fromWorld, victimPos, movingPiece.color);
       }
+      if (hesitant) await this._hesitate(mesh);
 
       animations.push(
         this.combat.playCapture({
           attacker: mesh,
           attackerType: movingPiece.type,
           attackerColor: movingPiece.color,
-          from: squareToWorld(move.from.row, move.from.col),
-          to: squareToWorld(move.to.row, move.to.col),
+          from: fromWorld,
+          to: toWorld,
           victim: victimMesh,
           victimType: victimPiece.type,
           victimColor: victimPiece.color,
-          victimPos: squareToWorld(victimSquare.row, victimSquare.col),
+          victimPos,
           victimSquare,
-          // A baixa sai do tabuleiro e vai para o cemitério do seu exército.
+          // No golpe: cicatriz na casa e aviso para arauto, luto etc.
+          onImpact: () => {
+            this.battlefield.scar({ ...victimSquare, attackerType: movingPiece.type, victimType: victimPiece.type });
+            this.events.emit('capture', {
+              square: victimSquare,
+              victimType: victimPiece.type,
+              victimColor: victimPiece.color,
+              attackerType: movingPiece.type,
+              attackerColor: movingPiece.color,
+              board: this.game.board,
+              replaying: this.replaying,
+            });
+          },
+          // A baixa sai do tabuleiro, vai para o cemitério e deixa a arma na casa.
           onVictimGone: (dead) => {
             this.pieceGroup.remove(dead);
+            this.acting.delete(dead);
             this.battlefield.bury({ type: victimPiece.type, color: victimPiece.color });
+            this.battlefield.leaveWeapon({ ...victimSquare, type: victimPiece.type });
+            this.events.emit('victimGone', { square: victimSquare, victimType: victimPiece.type });
           },
         }),
       );
     } else {
       audio.playStep(movingPiece.type);
-      animations.push(this._animateSlide(mesh, squareToWorld(move.to.row, move.to.col)));
+      animations.push(this._animateSlide(mesh, toWorld, { hesitant }));
     }
 
+    let rookMesh = null;
     if (move.castle) {
       const rookKey = key(move.castle.rookFrom.row, move.castle.rookFrom.col);
-      const rookMesh = this.pieces.get(rookKey);
+      rookMesh = this.pieces.get(rookKey);
+      this._act(rookMesh);
       this.pieces.delete(rookKey);
       this.pieces.set(key(move.castle.rookTo.row, move.castle.rookTo.col), rookMesh);
       animations.push(
         this.specialFx.playCastle(
           squareToWorld(move.castle.rookFrom.row, move.castle.rookFrom.col),
-          squareToWorld(move.to.row, move.to.col),
+          toWorld,
           movingPiece.color,
         ),
       );
@@ -567,7 +707,11 @@ export class GameView {
     this.pieces.set(key(move.to.row, move.to.col), mesh);
 
     await Promise.all(animations);
+    if (capturing) this.events.emit('attackEnd', { attackerType: movingPiece.type, replaying: this.replaying });
     await this.cinematic.end();
+    setSceneSpeed(1);
+    this.acting.delete(mesh);
+    if (rookMesh) this.acting.delete(rookMesh);
 
     this.game.makeMove(move, promotionType);
 
@@ -613,6 +757,8 @@ export class GameView {
 
     this._renderHighlights();
     this._updateMood();
+    this._syncBoard();
+    this.events.emit('moveEnd', { move, game: this.game, remote, replaying: this.replaying });
 
     audio.setAlert(this.game.status === STATUS.CHECK);
     if (this.game.status === STATUS.CHECK) audio.playUi('check');
@@ -625,8 +771,9 @@ export class GameView {
         await this.combat.playKingFall({
           mesh: this.pieces.get(key(king.row, king.col)),
           position: squareToWorld(king.row, king.col),
-          attackerPos: squareToWorld(move.to.row, move.to.col),
+          attackerPos: toWorld,
         });
+        await this._surrender(this.game.turn);
       }
     }
 
@@ -655,11 +802,38 @@ export class GameView {
     this.busy = false;
   }
 
+  // Um instante de medo antes de atacar uma casa defendida.
+  _hesitate(mesh) {
+    const base = mesh.position.clone();
+    return animate(280, (t) => {
+      const shake = Math.sin(t * Math.PI) * 0.018;
+      mesh.position.x = base.x + (Math.random() - 0.5) * shake;
+      mesh.position.z = base.z + (Math.random() - 0.5) * shake;
+    }).then(() => mesh.position.copy(base));
+  }
+
+  // Rendição: o exército derrotado se ajoelha e larga as armas; o rei
+  // vencedor ergue a espada. Não segura a partida por mais de ~1,6 s.
+  _surrender(loserColor) {
+    const losers = [];
+    let winnerKing = null;
+    for (const [k, mesh] of this.pieces) {
+      const [r, c] = k.split(',').map(Number);
+      const piece = this.game.board[r][c];
+      if (!piece) continue;
+      if (piece.color === loserColor && piece.type !== 'k') losers.push(mesh);
+      if (piece.color !== loserColor && piece.type === 'k') winnerKing = mesh;
+    }
+    const done = this.life.playSurrender({ losers, winnerKing });
+    return Promise.race([done, wait(1600)]);
+  }
+
   // Encerramento da partida: som de vitória, cena cinematográfica (quando há
   // uma peça que deu o mate) e entrega do resultado para a interface.
   async _finish(result) {
     audio.setMusicPhase?.('epic');
     if (result.winner) audio.playUi('victory');
+    this.events.emit('gameOver', { result, game: this.game });
     if (result.matingSquare) {
       const mesh = this.pieces.get(key(result.matingSquare.row, result.matingSquare.col));
       await this.victory.play({ pieceMesh: mesh, winnerColor: result.winner });
@@ -688,6 +862,7 @@ export class GameView {
     const moves = this.game.history.slice();
     const savedCinematic = settings.cinematic;
     settings.cinematic = false; // sem câmera lenta de captura durante o replay
+    this.cinematic.suppressCuts(true);
     this.victory.restore();
 
     this.replaying = true;
@@ -697,11 +872,14 @@ export class GameView {
     this.highlights.clear();
     this.decals.clear();
     this.battlefield.reset();
+    this.dangerEvents.reset();
+    this.events.emit('reset');
 
     this.game = new ChessGame(cloneBoard(this.initialBoard));
     this._buildPieces();
     this._musicPhase = null;
     this._updateMood();
+    this._syncBoard();
     this.cameraRig.snapToSide(this.game.turn);
 
     for (let i = 0; i < moves.length; i++) {
@@ -716,6 +894,7 @@ export class GameView {
 
     setTimeScale(1);
     settings.cinematic = savedCinematic;
+    this.cinematic.suppressCuts(false);
     this.replaying = false;
     this.busy = false;
     onDone?.();
@@ -762,20 +941,31 @@ export class GameView {
     this.callbacks.onReplayEnd?.();
   }
 
-  _animateSlide(mesh, target, duration = 360) {
+  _animateSlide(mesh, target, { hesitant = false, duration = 360 } = {}) {
     // Peças com pernas/braços nomeados caminham; as outras deslizam.
-    const walk = walkTo(mesh, target);
+    const walk = walkTo(mesh, target, { hesitant });
     if (walk) return walk;
 
     const start = mesh.position.clone();
-    return animate(duration, (t) => {
+    const yaw = Math.atan2(target.x - start.x, target.z - start.z);
+    const length = duration * (hesitant ? 1.3 : 1);
+    let marks = 0;
+    return animate(length, (t) => {
+      // Hesitante: sai devagar e só então acelera.
+      const k = hesitant ? Math.pow(t, 1.7) : t;
       // Deslocamento horizontal com leve ultrapassagem no fim: a peça
       // assenta na casa em vez de parar de forma seca.
-      const e = easeOutBack(easeInOut(t), 0.9);
+      const e = easeOutBack(easeInOut(k), 0.9);
       mesh.position.x = start.x + (target.x - start.x) * e;
       mesh.position.z = start.z + (target.z - start.z) * e;
       // Arco de salto suavizado (nasce e morre sem solavanco).
-      mesh.position.y = Math.sin(Math.PI * easeInOut(t)) * 0.3;
+      mesh.position.y = Math.sin(Math.PI * easeInOut(k)) * 0.3;
+      // Marcas no chão por onde passa (pegadas).
+      const due = Math.floor(e * 4);
+      if (due > marks) {
+        marks = due;
+        emitStep(mesh, yaw, marks % 2 ? 1 : -1);
+      }
     }).then(() => {
       mesh.position.set(target.x, 0, target.z);
     });
@@ -789,14 +979,18 @@ export class GameView {
     this.disposed = true;
     this.renderer.domElement.removeEventListener('pointerdown', this._onClick);
     this.renderer.domElement.removeEventListener('pointermove', this._onPointerMove);
+    setSceneSpeed(1);
     this.cinematic.cancel();
     this.combat.dispose();
     this.specialFx.dispose();
     this.replay.dispose();
     this.victory.dispose();
     this.decals.clear();
+    this.life.dispose();
+    this.dangerEvents.dispose();
     this.battlefield.dispose();
     this.environment.dispose();
+    this.events.clear();
     this._flashOverlay.remove();
     this._disposeScene();
   }

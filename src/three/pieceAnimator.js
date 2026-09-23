@@ -140,9 +140,22 @@ export function hasWalkRig(piece) {
   return !!findRig(piece);
 }
 
+// Passos: quem quiser saber onde cada pé pisou (pegadas) se inscreve aqui.
+const stepListeners = new Set();
+export function onPieceStep(fn) {
+  stepListeners.add(fn);
+  return () => stepListeners.delete(fn);
+}
+export function emitStep(piece, yaw, side) {
+  for (const fn of stepListeners) fn({ piece, x: piece.position.x, z: piece.position.z, yaw, side });
+}
+
 // Rig da peça (corpo, pernas, braços) para as animações de ataque; null sem rig.
+// Consultado a cada quadro pelo diretor de poses: guardado por peça.
+const rigByPiece = new WeakMap();
 export function getRig(piece) {
-  return findRig(piece);
+  if (!rigByPiece.has(piece)) rigByPiece.set(piece, findRig(piece));
+  return rigByPiece.get(piece);
 }
 
 const smoothstep = (e0, e1, x) => {
@@ -213,7 +226,8 @@ function settle(rig) {
 
 // Leva a peça até `target` caminhando. Mais casas = mais passos e mais tempo.
 // Devolve null quando a peça não tem as partes nomeadas: quem chama desliza.
-export function walkTo(piece, target) {
+// hesitant: começa devagar, como quem entra com medo numa casa perigosa.
+export function walkTo(piece, target, { hesitant = false } = {}) {
   const rig = findRig(piece);
   if (!rig) return null;
 
@@ -222,18 +236,24 @@ export function walkTo(piece, target) {
   const dz = target.z - start.z;
   const distance = Math.hypot(dx, dz);
   const steps = Math.max(2, Math.round(distance / WALK.stride));
-  const duration = THREE.MathUtils.clamp(
-    WALK.baseMs + distance * WALK.msPerUnit,
-    WALK.minMs,
-    WALK.maxMs,
-  );
+  const duration =
+    THREE.MathUtils.clamp(WALK.baseMs + distance * WALK.msPerUnit, WALK.minMs, WALK.maxMs) *
+    (hesitant ? 1.25 : 1);
+  const ease = hesitant ? (t) => easeInOut(Math.pow(t, 1.6)) : easeInOut;
+  const worldYaw = Math.atan2(dx, dz);
+  let stepsTaken = 0;
   // A frente do modelo é +Z; a peça preta já está girada 180° no invólucro.
   const yaw = distance > 1e-4 ? wrapAngle(Math.atan2(dx, dz) - piece.rotation.y) : 0;
 
   return animate(duration, (t) => {
-    const p = easeInOut(t);
+    const p = ease(t);
     piece.position.set(start.x + dx * p, start.y * (1 - p), start.z + dz * p);
     applyPose(rig, { t, p, steps, yaw });
+    const step = Math.floor(p * steps + 0.5);
+    if (step > stepsTaken) {
+      stepsTaken = step;
+      emitStep(piece, worldYaw, step % 2 ? 1 : -1);
+    }
   }).then(() => {
     piece.position.set(target.x, 0, target.z);
     return settle(rig);

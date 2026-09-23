@@ -323,6 +323,42 @@ const STEPS = {
   },
 };
 
+// Arauto: um sopro de ar ("whoosh") e uma nota curta junto do texto.
+function whoosh(engine, { gain = 0.14, duration = 0.5 } = {}) {
+  noise(engine, { duration, filter: 'bandpass', freq: 300, freqTo: 2600, q: 1.1, gain, attack: duration * 0.55 });
+}
+
+const HERALD = {
+  capture: (e) => {
+    whoosh(e, { gain: 0.1, duration: 0.42 });
+    tone(e, { freq: 392, type: 'triangle', duration: 0.6, gain: 0.06, attack: 0.02, delay: 0.22 });
+  },
+  major: (e) => {
+    whoosh(e, { gain: 0.16, duration: 0.55 });
+    [196, 294, 392].forEach((freq, i) =>
+      tone(e, { freq, type: 'triangle', duration: 1.3, gain: 0.07 - i * 0.012, attack: 0.03, delay: 0.3 }),
+    );
+    thud(e, { gain: 0.25, freq: 60, duration: 0.8, delay: 0.3 });
+  },
+  check: (e) => {
+    whoosh(e, { gain: 0.14, duration: 0.4 });
+    tone(e, { freq: 233, type: 'sawtooth', duration: 0.5, gain: 0.05, attack: 0.02, delay: 0.2 });
+    tone(e, { freq: 247, type: 'sawtooth', duration: 0.5, gain: 0.04, attack: 0.02, delay: 0.2 });
+  },
+  danger: (e) => {
+    whoosh(e, { gain: 0.12, duration: 0.6 });
+    tone(e, { freq: 110, freqTo: 104, type: 'sawtooth', duration: 1.4, gain: 0.07, attack: 0.3, delay: 0.25 });
+    tone(e, { freq: 155, freqTo: 147, type: 'triangle', duration: 1.4, gain: 0.05, attack: 0.3, delay: 0.25 });
+  },
+  mate: (e) => {
+    whoosh(e, { gain: 0.2, duration: 0.7 });
+    thud(e, { gain: 0.6, freq: 45, duration: 1.6, delay: 0.3 });
+    [98, 147, 196, 294].forEach((freq, i) =>
+      tone(e, { freq, type: 'triangle', duration: 2.4, gain: 0.08 - i * 0.012, attack: 0.05, delay: 0.3 }),
+    );
+  },
+};
+
 export function createSfx(engine) {
   function play(bank, prefix, type, sampleOptions) {
     if (!engine.ready) return;
@@ -336,6 +372,11 @@ export function createSfx(engine) {
     playImpact: (type) => play(IMPACTS, 'attack', type, { fromPeak: true }),
     playDeath: (type) => play(DEATHS, 'death', type),
     playStep: (type) => play(STEPS, 'step', type),
+    playHerald(kind) {
+      if (!engine.ready) return;
+      if (engine.playSample(`herald_${kind}`)) return;
+      HERALD[kind]?.(engine);
+    },
     playWarHorn() {
       if (!engine.ready) return;
       if (engine.playSample('warhorn')) return;

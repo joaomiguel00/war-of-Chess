@@ -34,6 +34,9 @@ export async function attackRook(ctx) {
     });
   }
 
+  // Visto do chão: a fortaleza se ergue sobre a vítima.
+  ctx.lowAngle?.(560);
+
   // Empina: junta o peso para trás.
   await animate(180, (t) => {
     const e = easeOut(t);

@@ -88,12 +88,16 @@ function placeCraters(random) {
 }
 
 // Textura de detalhe (repetida): lama seca rachada em células de Voronoi.
-function crackedEarthTexture() {
+// Com `lava`, também devolve uma máscara só das rachaduras (para brilharem).
+function crackedEarthTexture({ lava = false } = {}) {
   const size = 512;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext('2d');
   const image = ctx.createImageData(size, size);
+  const lavaCanvas = lava ? document.createElement('canvas') : null;
+  if (lavaCanvas) lavaCanvas.width = lavaCanvas.height = size;
+  const lavaImage = lava ? lavaCanvas.getContext('2d').createImageData(size, size) : null;
   const random = mulberry32(7);
   const cells = Array.from({ length: 26 }, () => [random() * size, random() * size]);
 
@@ -120,15 +124,24 @@ function crackedEarthTexture() {
       image.data[i + 1] = value * 0.97;
       image.data[i + 2] = value * 0.93;
       image.data[i + 3] = 255;
+      if (lavaImage) {
+        const glow = edge < 2.6 ? 255 * (1 - edge / 2.6) : 0;
+        lavaImage.data[i] = lavaImage.data[i + 1] = lavaImage.data[i + 2] = glow;
+        lavaImage.data[i + 3] = 255;
+      }
     }
   }
   ctx.putImageData(image, 0, 0);
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(SIZE / 1.9, SIZE / 1.9);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 4;
-  return texture;
+  const wrap = (c) => {
+    const texture = new THREE.CanvasTexture(c);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(SIZE / 1.9, SIZE / 1.9);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.anisotropy = 4;
+    return texture;
+  };
+  if (lavaCanvas) lavaCanvas.getContext('2d').putImageData(lavaImage, 0, 0);
+  return { map: wrap(canvas), lava: lavaCanvas ? wrap(lavaCanvas) : null };
 }
 
 // Estacas, pedras e lanças quebradas cravadas no chão.
@@ -219,7 +232,7 @@ function buildProps(group, heightAt, random, craters) {
   add(iron, new THREE.MeshStandardMaterial({ color: 0x6a6a72, roughness: 0.4, metalness: 0.8, flatShading: true }));
 }
 
-export function createTerrain({ scene, weather }) {
+export function createTerrain({ scene, weather, theme }) {
   const group = new THREE.Group();
   group.name = 'Terrain';
   scene.add(group);
@@ -267,12 +280,16 @@ export function createTerrain({ scene, weather }) {
   }
   geometry.computeVertexNormals();
 
-  const earth = new THREE.Color(0x5a4636).multiply(new THREE.Color(weather.terrainTint).multiplyScalar(1.05));
+  // A cor do tema manda; o clima só a tinge (areia fica areia na neblina).
+  const tint = new THREE.Color(weather.terrainTint).multiplyScalar(1.25);
+  const earth = new THREE.Color(theme.earth).multiply(tint).lerp(new THREE.Color(theme.earth), 0.45);
   const burn = new THREE.Color(0x1d1813);
   const wet = new THREE.Color(0x2a2520);
-  const soil = new THREE.Color(0x3a2b21).multiply(new THREE.Color(weather.terrainTint).multiplyScalar(1.15));
+  const soil = new THREE.Color(theme.soil).multiply(tint).lerp(new THREE.Color(theme.soil), 0.45);
   const snowColor = new THREE.Color(0xdde2f0);
   const edge = new THREE.Color(weather.ground);
+  if (theme.ground) edge.lerp(new THREE.Color(theme.ground), theme.groundMix);
+  const snowCover = Math.min(0.9, weather.snowCover + theme.snowBoost);
   const normal = geometry.attributes.normal;
   const colors = new Float32Array(position.count * 3);
   const c = new THREE.Color();
@@ -296,9 +313,9 @@ export function createTerrain({ scene, weather }) {
     const board = Math.max(Math.abs(x), Math.abs(z));
     c.multiplyScalar(1 - 0.25 * (1 - smoothstep(4.6, 5.6, board)));
 
-    if (weather.snowCover > 0) {
+    if (snowCover > 0) {
       const patch = smoothstep(0.38, 0.7, fbm(x * 0.6 - 7, z * 0.6 + 2)) * normal.getY(i) ** 4;
-      c.lerp(snowColor, weather.snowCover * patch * (1 - craterAt(x, z)));
+      c.lerp(snowColor, snowCover * patch * (1 - craterAt(x, z)));
     }
 
     c.lerp(edge, smoothstep(11.5, 15, r));
@@ -306,20 +323,34 @@ export function createTerrain({ scene, weather }) {
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-  const detail = crackedEarthTexture();
+  const textures = crackedEarthTexture({ lava: theme.lava });
+  const detail = textures.map;
   // Chão fosco: Lambert basta e custa bem menos por pixel que o PBR — e o
-  // terreno cobre boa parte da tela.
-  const material = new THREE.MeshLambertMaterial({ vertexColors: true, map: detail });
+  // terreno cobre boa parte da tela. No vulcão, as rachaduras brilham.
+  const material = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    map: detail,
+    ...(textures.lava ? { emissive: 0xff4a12, emissiveMap: textures.lava, emissiveIntensity: 0.9 } : {}),
+  });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
   group.add(mesh);
 
   buildProps(group, heightAt, random, craters);
 
+  let elapsed = 0;
+  // A lava respira devagar.
+  function update(dt) {
+    if (!textures.lava) return;
+    elapsed += dt;
+    material.emissiveIntensity = 0.75 + 0.3 * Math.sin(elapsed * 0.9) + 0.1 * Math.sin(elapsed * 2.7);
+  }
+
   function dispose() {
     detail.dispose();
+    textures.lava?.dispose();
     disposeObject(group);
   }
 
-  return { group, heightAt, craters, dispose };
+  return { group, heightAt, craters, update, dispose };
 }

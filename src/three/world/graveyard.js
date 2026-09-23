@@ -5,6 +5,7 @@ import { createPieceMesh } from '../pieceModels.js';
 import { animate, easeIn, easeOut, forEachMaterial, disposeObject } from '../animation.js';
 import { dustPuff } from '../fx.js';
 import { GRAVE_PLOT } from './terrain.js';
+import { drawFlag, createFlagTexture, FLAG_COLOR } from './bannerCloth.js';
 
 // Cemitério de peças capturadas: um canteiro em cada flanco do tabuleiro
 // (Ordem à esquerda de quem joga de brancas, Ruína à direita). Cada baixa
@@ -85,11 +86,64 @@ function deaden(mesh) {
   });
 }
 
-export function createGraveyard({ scene, heightAt }) {
+// Estandarte fincado na ponta de cada canteiro, com o emblema do exército.
+function buildStandards(group, heightAt) {
+  const standards = {};
+  const wood = new THREE.MeshLambertMaterial({ color: 0x2e2118, flatShading: true });
+  for (const color of [WHITE, 'b']) {
+    const x = SIDE_X[color] + Math.sign(SIDE_X[color]) * 0.95;
+    const z = color === WHITE ? -GRAVE_PLOT.zMax + 0.2 : GRAVE_PLOT.zMax - 0.2;
+    const y = heightAt(x, z);
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.045, 2.1, 6), wood);
+    pole.position.set(x, y + 1.02, z);
+    pole.castShadow = true;
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.8, 5), wood);
+    bar.rotation.z = Math.PI / 2;
+    bar.position.set(x, y + 1.95, z);
+    const flag = createFlagTexture(160, 220);
+    const cloth = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.72, 0.98, 4, 6),
+      new THREE.MeshLambertMaterial({ map: flag.texture, side: THREE.DoubleSide }),
+    );
+    cloth.geometry.translate(0, -0.49, 0);
+    cloth.position.set(x, y + 1.94, z);
+    // O pano fica de frente para o tabuleiro.
+    cloth.rotation.y = Math.PI / 2;
+    cloth.castShadow = true;
+    group.add(pole, bar, cloth);
+    standards[color] = { ...flag, cloth, base: cloth.geometry.attributes.position.array.slice() };
+  }
+  return standards;
+}
+
+export function createGraveyard({ scene, heightAt, emblems = {} }) {
   const group = new THREE.Group();
   group.name = 'Graveyard';
   scene.add(group);
   buildFences(group, heightAt);
+  const standards = buildStandards(group, heightAt);
+
+  function setEmblems(next) {
+    for (const color of [WHITE, 'b']) {
+      drawFlag(standards[color].canvas, FLAG_COLOR[color], next[color]);
+      standards[color].texture.needsUpdate = true;
+    }
+  }
+  setEmblems({ w: emblems.w ?? 'aguia', b: emblems.b ?? 'lobo' });
+
+  let elapsed = 0;
+  // O estandarte balança devagar, mais forte com vento.
+  function update(dt, wind = 0.3) {
+    elapsed += dt;
+    for (const s of Object.values(standards)) {
+      const array = s.cloth.geometry.attributes.position.array;
+      for (let i = 0; i < array.length; i += 3) {
+        const drop = -s.base[i + 1] / 0.98;
+        array[i + 2] = s.base[i + 2] + Math.sin(elapsed * (1.6 + wind * 2) + s.base[i + 1] * 3) * 0.06 * (0.4 + wind) * drop;
+      }
+      s.cloth.geometry.attributes.position.needsUpdate = true;
+    }
+  }
 
   const graves = new THREE.Group();
   group.add(graves);
@@ -202,6 +256,7 @@ export function createGraveyard({ scene, heightAt }) {
 
   function dispose() {
     clear();
+    Object.values(standards).forEach((s) => s.texture.dispose());
     stoneGeometry.dispose();
     Object.values(stones).forEach((m) => m.dispose());
     Object.values(markMaterial).forEach((m) => m.dispose());
@@ -209,5 +264,5 @@ export function createGraveyard({ scene, heightAt }) {
     disposeObject(group);
   }
 
-  return { group, bury, clear, dispose, count: () => used[WHITE] + used.b };
+  return { group, bury, clear, update, setEmblems, dispose, count: () => used[WHITE] + used.b };
 }

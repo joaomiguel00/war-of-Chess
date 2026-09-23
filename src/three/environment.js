@@ -3,6 +3,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { WHITE, BLACK } from '../chess/moveGen.js';
 import { disposeObject } from './animation.js';
 import { getWeather } from './weather.js';
+import { THEMES } from './themes.js';
 
 // Céu, névoa, floresta distante, bandeiras e partículas de clima. O terreno,
 // os braseiros, o acampamento e o cemitério ficam em módulos próprios
@@ -48,9 +49,12 @@ function inCampArc(angle) {
   return Math.abs(Math.sin(angle)) > 0.78;
 }
 
-// Floresta: chão distante, pinheiros em silhueta, árvores secas e montes.
-function buildForest(group, weather) {
-  const groundMaterial = distantMaterial(weather.ground);
+// Horizonte conforme o tema: chão distante + pinheiros (floresta), dunas
+// (deserto), picos nevados (montanha) ou um vulcão fumegante (vulcânico).
+function buildScenery(group, weather, theme) {
+  const groundColor = new THREE.Color(weather.ground);
+  if (theme.ground) groundColor.lerp(new THREE.Color(theme.ground), theme.groundMix);
+  const groundMaterial = distantMaterial(groundColor);
   const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 18), groundMaterial);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = GROUND_Y;
@@ -60,6 +64,9 @@ function buildForest(group, weather) {
   const foliageGeos = [];
   const bareGeos = [];
   const moundGeos = [];
+  const rockGeos = [];
+  const peakGeos = [];
+  const capGeos = [];
 
   function pineAt(x, z, scale) {
     const trunkH = 0.7 * scale;
@@ -109,39 +116,118 @@ function buildForest(group, weather) {
     }
   }
 
-  for (let i = 0; i < 64; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = inCampArc(angle) ? 33 + Math.random() * 12 : 13 + Math.random() * 26;
-    const x = Math.cos(angle) * radius;
-    const z = Math.sin(angle) * radius;
-    const scale = 1 + Math.random() * 1.4 + radius * 0.03;
-    if (Math.random() < 0.78) pineAt(x, z, scale);
-    else bareAt(x, z, scale);
-  }
-
-  for (let i = 0; i < 26; i++) {
-    const angle = Math.random() * Math.PI * 2;
-    const radius = 14 + Math.random() * 24;
-    const size = 0.5 + Math.random() * 1.8;
+  function moundAt(x, z, size, flat = 0.4) {
     moundGeos.push(
-      placed(new THREE.IcosahedronGeometry(size, 0), {
-        position: new THREE.Vector3(
-          Math.cos(angle) * radius,
-          GROUND_Y + size * 0.28,
-          Math.sin(angle) * radius,
-        ),
-        rotation: new THREE.Euler(Math.random(), Math.random(), Math.random()),
-        scale: new THREE.Vector3(1, 0.4 + Math.random() * 0.3, 1),
+      placed(new THREE.IcosahedronGeometry(size, 1), {
+        position: new THREE.Vector3(x, GROUND_Y + size * 0.2, z),
+        rotation: new THREE.Euler(Math.random() * 0.3, Math.random() * 3, Math.random() * 0.3),
+        scale: new THREE.Vector3(1.4, flat, 1),
       }),
     );
   }
 
-  const moundMaterial = distantMaterial(weather.mounds);
+  function rockAt(x, z, size) {
+    rockGeos.push(
+      placed(new THREE.DodecahedronGeometry(size, 0), {
+        position: new THREE.Vector3(x, GROUND_Y + size * 0.35, z),
+        rotation: new THREE.Euler(Math.random(), Math.random() * 3, Math.random()),
+        scale: new THREE.Vector3(1, 0.6 + Math.random() * 0.5, 1),
+      }),
+    );
+  }
+
+  function peakAt(x, z, radius, height, withCap) {
+    peakGeos.push(
+      placed(new THREE.ConeGeometry(radius, height, 7, 1), {
+        position: new THREE.Vector3(x, GROUND_Y + height / 2 - 0.5, z),
+        rotation: new THREE.Euler(0, Math.random() * Math.PI, 0),
+      }),
+    );
+    if (withCap) {
+      const capH = height * 0.32;
+      capGeos.push(
+        placed(new THREE.ConeGeometry(radius * 0.34, capH, 7, 1), {
+          position: new THREE.Vector3(x, GROUND_Y + height - capH / 2 - 0.45, z),
+          rotation: new THREE.Euler(0, Math.random() * Math.PI, 0),
+        }),
+      );
+    }
+  }
+
+  const ring = (count, rMin, rMax, fn) => {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = inCampArc(angle) ? Math.max(rMin, 33) + Math.random() * 12 : rMin + Math.random() * (rMax - rMin);
+      fn(Math.cos(angle) * radius, Math.sin(angle) * radius, radius);
+    }
+  };
+
+  const extras = {};
+  if (theme.scenery === 'dunes') {
+    ring(34, 14, 48, (x, z, r) => moundAt(x, z, 2.2 + Math.random() * 4 + r * 0.05, 0.28 + Math.random() * 0.12));
+    ring(14, 12, 30, (x, z) => rockAt(x, z, 0.3 + Math.random() * 0.8));
+  } else if (theme.scenery === 'peaks') {
+    ring(34, 13, 36, (x, z, r) => pineAt(x, z, 1 + Math.random() * 1.2 + r * 0.03));
+    ring(18, 12, 34, (x, z) => rockAt(x, z, 0.5 + Math.random() * 1.4));
+    for (let i = 0; i < 14; i++) {
+      const angle = (i / 14) * Math.PI * 2 + Math.random() * 0.3;
+      const r = 44 + Math.random() * 10;
+      peakAt(Math.cos(angle) * r, Math.sin(angle) * r, 7 + Math.random() * 7, 14 + Math.random() * 14, true);
+    }
+  } else if (theme.scenery === 'volcano') {
+    ring(26, 13, 38, (x, z, r) => bareAt(x, z, 0.8 + Math.random() * 0.8 + r * 0.02));
+    ring(30, 12, 40, (x, z) => rockAt(x, z, 0.4 + Math.random() * 1.6));
+    // O vulcão: um cone largo atrás do exército da Ruína, com a cratera em brasa.
+    const vx = 14;
+    const vz = 46;
+    peakAt(vx, vz, 16, 22, false);
+    const crater = new THREE.Mesh(
+      new THREE.CylinderGeometry(3.2, 4.4, 0.8, 10, 1, true),
+      new THREE.MeshBasicMaterial({ color: 0xff5a1a, toneMapped: false, side: THREE.DoubleSide, fog: false }),
+    );
+    crater.position.set(vx, GROUND_Y + 21.1, vz);
+    group.add(crater);
+    extras.volcano = { x: vx, y: GROUND_Y + 21.6, z: vz, crater };
+  } else {
+    ring(64, 13, 39, (x, z, r) => {
+      const scale = 1 + Math.random() * 1.4 + r * 0.03;
+      if (Math.random() < 0.78) pineAt(x, z, scale);
+      else bareAt(x, z, scale);
+    });
+    ring(26, 14, 38, (x, z) => moundAt(x, z, 0.5 + Math.random() * 1.8, 0.45));
+  }
+
+  const moundColor = new THREE.Color(theme.mounds ?? weather.mounds);
   mergeInto(group, trunkGeos, distantMaterial(0x241c2c), { shadows: false });
-  mergeInto(group, foliageGeos, distantMaterial(0x1b1730), { shadows: false });
-  mergeInto(group, bareGeos, distantMaterial(0x181320), { shadows: false });
-  mergeInto(group, moundGeos, moundMaterial, { shadows: false });
-  return { groundMaterial, moundMaterial };
+  mergeInto(group, foliageGeos, distantMaterial(theme.scenery === 'peaks' ? 0x1c2630 : 0x1b1730), { shadows: false });
+  mergeInto(group, bareGeos, distantMaterial(theme.scenery === 'volcano' ? 0x120c0a : 0x181320), { shadows: false });
+  mergeInto(group, moundGeos, distantMaterial(moundColor), { shadows: false });
+  mergeInto(group, rockGeos, distantMaterial(theme.scenery === 'volcano' ? 0x16110f : 0x3a3a42), { shadows: false });
+  mergeInto(group, peakGeos, distantMaterial(theme.scenery === 'volcano' ? 0x1a1210 : 0x4a5262), { shadows: false });
+  mergeInto(group, capGeos, distantMaterial(0xe8eef8), { shadows: false });
+  return extras;
+}
+
+// Fumaça grossa subindo da cratera do vulcão.
+function buildPlume(group, volcano) {
+  if (!volcano) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext('2d');
+  const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,0.8)');
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 64, 64);
+  const texture = new THREE.CanvasTexture(canvas);
+  const puffs = [];
+  for (let i = 0; i < 14; i++) {
+    const material = new THREE.SpriteMaterial({ map: texture, color: 0x2a1c18, transparent: true, depthWrite: false, fog: false });
+    const sprite = new THREE.Sprite(material);
+    group.add(sprite);
+    puffs.push({ sprite, material, age: (i / 14) * 12 });
+  }
+  return { puffs, volcano, texture };
 }
 
 // Olhos azuis brilhando na escuridão da mata (só onde é escuro de verdade).
@@ -311,19 +397,24 @@ function buildRain(group) {
   return { rain, geometry, material, speeds, count };
 }
 
-export function createEnvironment({ scene, lights, weather: weatherId, onLightning }) {
+export function createEnvironment({ scene, lights, weather: weatherId, theme = THEMES.acampamento, onLightning }) {
   const weather = getWeather(weatherId);
   const group = new THREE.Group();
   scene.add(group);
 
-  // Céu e névoa do clima escolhido.
-  scene.background = new THREE.Color(weather.background);
+  // Céu e névoa do clima, puxados para o tom do tema.
+  const skyColor = new THREE.Color(weather.background);
+  if (theme.sky) skyColor.lerp(new THREE.Color(theme.sky), theme.skyMix);
+  const fogColor = new THREE.Color(weather.fogColor);
+  if (theme.fog) fogColor.lerp(new THREE.Color(theme.fog), theme.fogMix);
+  scene.background = skyColor.clone();
   if (scene.fog) {
-    scene.fog.color.set(weather.fogColor);
+    scene.fog.color.copy(fogColor);
     scene.fog.density = weather.fogDensity;
   }
 
-  const forest = buildForest(group, weather);
+  const scenery = buildScenery(group, weather, theme);
+  const plume = buildPlume(group, scenery.volcano);
   const eyesLayer = buildEyes(group);
   const fogLayers = buildGroundFog(group, weather);
   const banners = buildBanners(group);
@@ -336,8 +427,9 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
   const snowSway = Float32Array.from({ length: snow.count }, () => Math.random() * Math.PI * 2);
   const sandSpeeds = Float32Array.from({ length: sand.count }, () => 4 + Math.random() * 5);
 
-  // Olhos só brilham no escuro.
-  eyesLayer.eyes.forEach((e) => (e.pair.visible = weather.darkness > 0.4));
+  // Olhos só brilham no escuro, e só onde há mata.
+  const hasWoods = theme.scenery === 'pines' || theme.scenery === 'peaks';
+  eyesLayer.eyes.forEach((e) => (e.pair.visible = hasWoods && weather.darkness > 0.4));
 
   // Luz dos relâmpagos: fonte própria, então nunca briga com a cena de vitória.
   // Só existe em clima com raios: cada luz a mais pesa em todo pixel da cena.
@@ -355,7 +447,7 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
     key: lights.key.intensity * weather.light.key,
     fill: lights.fill.intensity * weather.light.fill,
     fogDensity: weather.fogDensity,
-    background: new THREE.Color(weather.background),
+    background: skyColor.clone(),
   };
   const original = {
     ambient: lights.ambient.intensity,
@@ -363,7 +455,7 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
     key: lights.key.intensity,
     fill: lights.fill.intensity,
   };
-  const darkBackground = new THREE.Color(weather.background).multiplyScalar(0.45);
+  const darkBackground = skyColor.clone().multiplyScalar(0.45);
   const currentBackground = new THREE.Color();
 
   let progress = 0;
@@ -372,6 +464,9 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
   let sandLevel = 0;
   let flash = 0;
   let elapsed = 0;
+  // Multiplicadores externos: atos da partida e rajadas perto do rei.
+  let windScale = 1;
+  let particleBoost = 1;
 
   // progress: 0 no início da partida, 1 quando o massacre já aconteceu.
   function setProgress(value) {
@@ -396,15 +491,37 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
     rain.rain.visible = rainLevel > 0.01;
     sand.material.opacity = sandLevel * 0.5;
     sand.points.visible = sandLevel > 0.01;
-    dust.material.opacity = weather.dust * (1 - snowLevel * 0.6);
-    dust.points.visible = weather.dust > 0.01;
+    applyDust();
+  }
+
+  function applyDust() {
+    dust.material.opacity = Math.min(0.85, weather.dust * (1 - snowLevel * 0.6) * particleBoost);
+    dust.points.visible = dust.material.opacity > 0.01;
+  }
+
+  function setWindScale(value) {
+    windScale = value;
+  }
+
+  function setParticleBoost(value) {
+    particleBoost = value;
+    applyDust();
+  }
+
+  // Relâmpago sob demanda (eventos perto do rei ameaçado).
+  function strikeLightning(power = 1) {
+    lightning.age = 0;
+    lightning.next = Math.max(lightning.next, 3);
+    lightning.pulses = [
+      { at: 0, power },
+      { at: 0.1, power: power * 0.6 },
+    ];
   }
 
   function updateLightning(dt) {
-    if (!weather.lightning) return;
-    lightning.next -= dt;
     lightning.age += dt;
-    if (lightning.next <= 0) {
+    if (weather.lightning) lightning.next -= dt;
+    if (weather.lightning && lightning.next <= 0) {
       lightning.next = 6 + Math.random() * 10;
       lightning.age = 0;
       // Duas ou três piscadas, a primeira mais forte.
@@ -419,14 +536,25 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
       const t = lightning.age - pulse.at;
       if (t >= 0 && t < 0.35) flash = Math.max(flash, pulse.power * Math.exp(-t * 14));
     }
-    lightningLight.intensity = flash * 7;
+    if (lightningLight) lightningLight.intensity = flash * 7;
     if (flash > 0.002) scene.background.copy(currentBackground).lerp(flashColor, flash * 0.7);
     else if (lightning.age < 1) scene.background.copy(currentBackground);
   }
 
   function update(dt) {
     elapsed += dt;
-    const wind = weather.wind;
+    const wind = weather.wind * windScale;
+
+    if (plume) {
+      for (const p of plume.puffs) {
+        p.age = (p.age + dt) % 12;
+        const t = p.age / 12;
+        p.sprite.position.set(plume.volcano.x + t * 9 + Math.sin(t * 6) * 1.2, plume.volcano.y + t * 16, plume.volcano.z + t * 3);
+        p.sprite.scale.setScalar(4 + t * 14);
+        p.material.opacity = Math.sin(Math.PI * t) * 0.75;
+      }
+      plume.volcano.crater.material.color.setRGB(1, 0.3 + 0.08 * Math.sin(elapsed * 2.3), 0.08);
+    }
 
     for (const layer of fogLayers) {
       layer.disc.rotation.z += layer.speed * dt * (1 + wind * 3);
@@ -534,6 +662,8 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
   }
 
   function dispose() {
+    plume?.texture.dispose();
+    plume?.puffs.forEach((p) => p.material.dispose());
     disposeObject(group);
     lights.ambient.intensity = original.ambient;
     lights.hemi.intensity = original.hemi;
@@ -555,6 +685,13 @@ export function createEnvironment({ scene, lights, weather: weatherId, onLightni
     get rainLevel() {
       return rainLevel;
     },
+    get wind() {
+      return weather.wind * windScale;
+    },
+    setWindScale,
+    setParticleBoost,
+    strikeLightning,
+    fogColor,
     // 0..1 enquanto um relâmpago ilumina o céu.
     get flash() {
       return flash;

@@ -362,8 +362,16 @@ export function createCombat({ scene, decals, audio, shake, flash, cinematic, li
     victimPos,
     victimSquare,
     onVictimGone,
+    onImpact,
   }) {
     const dir = horizontalDir(from, victimPos);
+    // O primeiro golpe que acerta avisa quem precisa saber (cicatrizes, arauto...).
+    let impacted = false;
+    const impact = () => {
+      if (impacted) return;
+      impacted = true;
+      onImpact?.();
+    };
     const teamColor = GLOW_COLOR[attackerColor] ?? GLOW_COLOR.b;
     const baseYaw = attacker.rotation.y;
     attacker.rotation.order = 'YXZ';
@@ -372,6 +380,7 @@ export function createCombat({ scene, decals, audio, shake, flash, cinematic, li
     // Início da morte da vítima (uma vez só), no estilo pedido pelo ataque.
     const kill = (style = 'default') => {
       if (death) return;
+      impact();
       const typeDeath = DEATHS[victimType] ?? DEATHS.p;
       const runner =
         style === 'crush' ? deathCrushed : style === 'dissolve' ? withDissolve(typeDeath, 0xffcf5a) : typeDeath;
@@ -396,6 +405,7 @@ export function createCombat({ scene, decals, audio, shake, flash, cinematic, li
     // O instante do golpe: som de impacto, estouro, tremor e câmera lenta.
     const strike = ({ power, shake: amount, color, kill: doKill = true, style, burst = true } = {}) => {
       const weight = power ?? IMPACT_POWER[victimType] ?? 1;
+      impact();
       audio?.playImpact?.(attackerType);
       if (burst) impactBurst(fx, victim.position, color ?? teamColor, weight);
       shake?.(amount ?? 0.3 + weight * 0.16);
@@ -420,6 +430,8 @@ export function createCombat({ scene, decals, audio, shake, flash, cinematic, li
       strike,
       kill,
       hitStop,
+      // Corte rente ao chão (só torre e rei chamam).
+      lowAngle: (hold) => cinematic?.lowAngleCut?.({ subject: attacker, toward: victimPos, hold }),
       shake: (value) => shake?.(value),
       flash: (color, strength, ms) => flash?.(color, strength, ms),
       sound: {

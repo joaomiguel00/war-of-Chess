@@ -49,8 +49,8 @@ export function createRoomClient() {
   return {
     connect,
     on,
-    createRoom: (color) => send({ type: 'create', color }),
-    joinRoom: (code) => send({ type: 'join', code }),
+    createRoom: (color, emblem) => send({ type: 'create', color, emblem }),
+    joinRoom: (code, emblem) => send({ type: 'join', code, emblem }),
     sendMove: (move) => send({ type: 'move', move }),
     sendChat: (text) => send({ type: 'chat', text }),
     dispose: () => {

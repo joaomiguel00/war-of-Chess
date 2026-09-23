@@ -14,6 +14,9 @@ export function createCinematic({ camera, controls }) {
   let slowTimer = null;
   let followFn = null;
   let followRaf = 0;
+  let cutting = false;
+  // O replay completo desliga os cortes (fica só a ação).
+  let cutsSuppressed = false;
   const desired = new THREE.Vector3();
   const delta = new THREE.Vector3();
 
@@ -52,7 +55,7 @@ export function createCinematic({ camera, controls }) {
       followRaf = 0;
       return;
     }
-    if (followFn) {
+    if (followFn && !cutting) {
       const point = followFn();
       if (point) {
         desired.set(point.x, 0.55, point.z);
@@ -106,6 +109,8 @@ export function createCinematic({ camera, controls }) {
   }
 
   async function end() {
+    // Um corte rente ao chão em andamento termina antes da volta.
+    if (cutPromise) await cutPromise;
     clearTimeout(slowTimer);
     setTimeScale(1);
     followFn = null;
@@ -147,6 +152,70 @@ export function createCinematic({ camera, controls }) {
     );
   }
 
+  // Corte seco para um ângulo rente ao chão, olhando para cima em direção
+  // à peça — a visão de um soldado minúsculo diante da torre ou do rei.
+  // Segura `hold` ms (tempo real) e volta suavemente para onde estava.
+  let cutPromise = null;
+  function lowAngleCut(options) {
+    if (cutting || cutsSuppressed || !settings.cameraFx || !options?.subject) return Promise.resolve();
+    cutPromise = runCut(options).finally(() => (cutPromise = null));
+    return cutPromise;
+  }
+
+  async function runCut({ subject, toward, hold = 520 }) {
+    cutting = true;
+    const back = {
+      position: camera.position.clone(),
+      target: controls.target.clone(),
+      enabled: controls.enabled,
+      fov: camera.fov,
+    };
+    controls.enabled = false;
+
+    const at = subject.position;
+    const dir = new THREE.Vector3(toward.x - at.x, 0, toward.z - at.z);
+    if (dir.lengthSq() < 1e-4) dir.set(0, 0, 1);
+    dir.normalize();
+    const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir);
+    const eye = at.clone().addScaledVector(dir, 1.05).addScaledVector(side, 0.55).setY(0.1);
+    const look = at.clone().setY(1.05);
+
+    camera.position.copy(eye);
+    camera.fov = back.fov + 14;
+    camera.updateProjectionMatrix();
+    controls.target.copy(look);
+    camera.lookAt(look);
+
+    await animate(hold, () => {
+      camera.position.copy(eye);
+      controls.target.copy(look);
+      camera.lookAt(look);
+    }, { scaled: false });
+
+    const fromPosition = camera.position.clone();
+    const fromTarget = controls.target.clone();
+    await animate(
+      380,
+      (t) => {
+        const e = easeInOut(t);
+        camera.position.lerpVectors(fromPosition, back.position, e);
+        controls.target.lerpVectors(fromTarget, back.target, e);
+        camera.fov = back.fov + 14 * (1 - e);
+        camera.updateProjectionMatrix();
+        camera.lookAt(controls.target);
+      },
+      { scaled: false },
+    );
+    camera.fov = back.fov;
+    camera.updateProjectionMatrix();
+    controls.enabled = back.enabled;
+    cutting = false;
+  }
+
+  function suppressCuts(value) {
+    cutsSuppressed = !!value;
+  }
+
   function cancel() {
     clearTimeout(slowTimer);
     setTimeScale(1);
@@ -166,6 +235,8 @@ export function createCinematic({ camera, controls }) {
     end,
     follow,
     slowMo,
+    lowAngleCut,
+    suppressCuts,
     flyTo,
     cancel,
     enabled,

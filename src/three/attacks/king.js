@@ -35,6 +35,9 @@ export async function attackKing(ctx) {
     }),
   ]);
 
+  // Visto do chão: o rei ergue a espada contra o céu.
+  ctx.lowAngle?.(540);
+
   // Espada sobe acima da cabeça.
   await Promise.all([
     swingArm(ctx, 'R', 2.9, 200, easeOut),

@@ -12,6 +12,14 @@ import { computeTitles } from './achievements.js';
 import { settings, setSetting } from './settings.js';
 import { audio } from './audio/index.js';
 import { WEATHERS, WEATHER_ORDER, getWeather } from './three/weather.js';
+import { THEMES, THEME_ORDER, getTheme } from './three/themes.js';
+import { addPieceDecorator } from './three/pieceModels.js';
+import { applySkin } from './three/skinApply.js';
+import { EMBLEMS, EMBLEM_ORDER, emblemSvg, validEmblem } from './emblems.js';
+import { recordMatch } from './progress.js';
+import { createHerald } from './ui/herald.js';
+import { createTension } from './ui/tension.js';
+import { renderTrophyRoom, renderWardrobe } from './ui/trophies.js';
 import { createCaptureTester } from './debug.js';
 import { setDebugSpeed } from './three/animation.js';
 
@@ -28,6 +36,13 @@ let chat = null;
 let customBoards = { [WHITE]: null, [BLACK]: null };
 let room = null;
 let onlineColor = null;
+let herald = null;
+let tension = null;
+// Emblemas da partida em andamento (online: o do adversário vem da rede).
+let matchEmblems = null;
+
+// Skins equipadas valem para toda peça criada (tabuleiro, cemitério, replay).
+addPieceDecorator(applySkin);
 
 const teamName = (color) => (color === WHITE ? 'Ordem' : 'Ruína');
 
@@ -41,6 +56,10 @@ function destroyMatch() {
     chat.dispose();
     chat = null;
   }
+  herald?.dispose();
+  herald = null;
+  tension?.dispose();
+  tension = null;
   if (gameView) {
     gameView.dispose();
     gameView = null;
@@ -86,8 +105,17 @@ function showStartMenu() {
             <span>Crie ou entre numa sala — cada jogador no seu dispositivo</span>
           </button>
         </div>
-        <button class="btn btn-ghost btn-wide" id="btn-options">Opções</button>
-        <p class="menu-weather">Clima da batalha: <strong>${getWeather(settings.weather).label}</strong> · mude em Opções</p>
+        <div class="menu-row">
+          <button class="btn btn-ghost" id="btn-trophies">Sala de Troféus</button>
+          <button class="btn btn-ghost" id="btn-wardrobe">Vestiário</button>
+          <button class="btn btn-ghost" id="btn-options">Opções</button>
+        </div>
+        <p class="menu-weather">
+          ${emblemSvg(settings.emblems.w, { size: 18, className: 'emblem-inline team-w' })}
+          <strong>${getTheme(settings.theme).label}</strong> · clima <strong>${getWeather(settings.weather).label}</strong>
+          ${emblemSvg(settings.emblems.b, { size: 18, className: 'emblem-inline team-b' })}
+          <br />mude cenário, clima e estandartes em Opções
+        </p>
       </div>
     </div>
   `;
@@ -96,6 +124,18 @@ function showStartMenu() {
   uiRoot.querySelector('#btn-custom').onclick = startCustomFlow;
   uiRoot.querySelector('#btn-online').onclick = showOnlineMenu;
   uiRoot.querySelector('#btn-options').onclick = () => showOptions(showStartMenu);
+  uiRoot.querySelector('#btn-trophies').onclick = showTrophies;
+  uiRoot.querySelector('#btn-wardrobe').onclick = () => showWardrobe(showStartMenu);
+}
+
+function showTrophies() {
+  resetUI();
+  renderTrophyRoom(uiRoot, { onBack: showStartMenu, onWardrobe: () => showWardrobe(showTrophies) });
+}
+
+function showWardrobe(onBack) {
+  resetUI();
+  renderWardrobe(uiRoot, { onBack });
 }
 
 /* -------------------------------------------------------------- opções */
@@ -110,6 +150,21 @@ const TOGGLES = [
     key: 'cinematic',
     title: 'Câmera cinematográfica',
     hint: 'Nas capturas, a câmera se aproxima em câmera lenta e depois volta',
+  },
+  {
+    key: 'cameraFx',
+    title: 'Cortes de câmera dramáticos',
+    hint: 'Ângulo rente ao chão nos golpes da torre e do rei, e câmera lenta na última resistência',
+  },
+  {
+    key: 'intro',
+    title: 'Cena de abertura',
+    hint: 'Voo sobre o campo de batalha antes do primeiro lance (dá para pular)',
+  },
+  {
+    key: 'intenseFx',
+    title: 'Efeitos intensos',
+    hint: 'Batimento cardíaco e vinheta vermelha no xeque, zumbido após golpes da rainha e do rei',
   },
 ];
 
@@ -180,27 +235,79 @@ function showOptions(onBack) {
           </div>
         </div>
 
+        <div class="option-clock">
+          <span class="option-text"><strong>Campo de batalha</strong><em id="theme-hint">${getTheme(settings.theme).hint}</em></span>
+          <div class="clock-choices weather-choices" id="theme-choices">
+            ${THEME_ORDER.map(
+              (id) =>
+                `<button type="button" class="clock-choice theme-choice ${getTheme(settings.theme).id === id ? 'is-on' : ''}" data-theme="${id}">${THEMES[id].label}</button>`,
+            ).join('')}
+          </div>
+        </div>
+
+        <div class="option-clock">
+          <span class="option-text"><strong>Estandartes</strong><em>Emblema de cada exército (bandeiras, cemitério e vitória)</em></span>
+          ${[
+            { key: 'w', label: 'Ordem' },
+            { key: 'b', label: 'Ruína' },
+            { key: 'online', label: 'Você (online)' },
+          ]
+            .map(({ key: slot, label }) => {
+              const current = slot === 'online' ? settings.myEmblem : settings.emblems[slot];
+              return `<div class="emblem-row" data-slot="${slot}">
+                <span class="emblem-row-label team-${slot === 'online' ? 'w' : slot}">${label}</span>
+                <div class="emblem-choices">${EMBLEM_ORDER.map(
+                  (id) =>
+                    `<button type="button" class="emblem-choice ${id === current ? 'is-on' : ''}" data-emblem="${id}" title="${EMBLEMS[id].label}">${emblemSvg(id, { size: 26 })}</button>`,
+                ).join('')}</div>
+              </div>`;
+            })
+            .join('')}
+        </div>
+
         <button class="btn btn-primary btn-wide" id="btn-back">Voltar</button>
       </div>
     </div>
   `;
 
-  uiRoot.querySelectorAll('.weather-choice').forEach((button) => {
+  uiRoot.querySelectorAll('.theme-choice').forEach((button) => {
+    button.onclick = () => {
+      setSetting('theme', button.dataset.theme);
+      uiRoot.querySelectorAll('.theme-choice').forEach((b) => b.classList.toggle('is-on', b === button));
+      uiRoot.querySelector('#theme-hint').textContent = getTheme(button.dataset.theme).hint;
+      audio.playUi('click');
+    };
+  });
+
+  uiRoot.querySelectorAll('.emblem-row').forEach((row) => {
+    row.querySelectorAll('.emblem-choice').forEach((button) => {
+      button.onclick = () => {
+        const slot = row.dataset.slot;
+        const id = button.dataset.emblem;
+        if (slot === 'online') setSetting('myEmblem', id);
+        else setSetting('emblems', { ...settings.emblems, [slot]: id });
+        row.querySelectorAll('.emblem-choice').forEach((b) => b.classList.toggle('is-on', b === button));
+        audio.playUi('click');
+      };
+    });
+  });
+
+  uiRoot.querySelectorAll('.weather-choice:not(.theme-choice)').forEach((button) => {
     button.onclick = () => {
       setSetting('weather', button.dataset.weather);
       uiRoot
-        .querySelectorAll('.weather-choice')
+        .querySelectorAll('.weather-choice:not(.theme-choice)')
         .forEach((b) => b.classList.toggle('is-on', b === button));
       uiRoot.querySelector('#weather-hint').textContent = getWeather(button.dataset.weather).hint;
       audio.playUi('click');
     };
   });
 
-  uiRoot.querySelectorAll('.clock-choice:not(.weather-choice)').forEach((button) => {
+  uiRoot.querySelectorAll('.clock-choice:not(.weather-choice):not(.theme-choice)').forEach((button) => {
     button.onclick = () => {
       setSetting('clockMinutes', Number(button.dataset.min));
       uiRoot
-        .querySelectorAll('.clock-choice:not(.weather-choice)')
+        .querySelectorAll('.clock-choice:not(.weather-choice):not(.theme-choice)')
         .forEach((b) => b.classList.toggle('is-on', b === button));
       audio.playUi('click');
     };
@@ -451,9 +558,9 @@ async function createOnlineRoom(color) {
     return;
   }
   room.on('created', ({ code }) => showWaitingRoom(code, color));
-  room.on('opponent-joined', () => startOnlineMatch(color));
+  room.on('opponent-joined', ({ opponentEmblem }) => startOnlineMatch(color, opponentEmblem));
   room.on('error', (msg) => showOnlineError(msg.message, showOnlineMenu));
-  room.createRoom(color);
+  room.createRoom(color, settings.myEmblem);
 }
 
 function showWaitingRoom(code, color) {
@@ -462,10 +569,11 @@ function showWaitingRoom(code, color) {
     <div class="screen intro-screen team-${color}">
       <div class="start-card">
         <p class="eyebrow">Sala criada</p>
+        <div class="waiting-emblem team-${color}">${emblemSvg(settings.myEmblem, { size: 84 })}</div>
         <h2>Compartilhe o código</h2>
         <div class="room-code" id="room-code">${code}</div>
         <button class="btn btn-secondary btn-wide" id="btn-copy-code">Copiar código</button>
-        <p class="subtitle">Aguardando o adversário entrar…</p>
+        <p class="subtitle">Aguardando o adversário entrar… Seu estandarte: <strong>${EMBLEMS[validEmblem(settings.myEmblem)].label}</strong></p>
         <button class="btn btn-ghost btn-wide" id="btn-online-cancel">Cancelar</button>
       </div>
     </div>
@@ -527,16 +635,18 @@ async function joinOnlineRoom(code, errorEl) {
     errorEl.textContent = err.message;
     return;
   }
-  room.on('joined', ({ color }) => startOnlineMatch(color));
+  room.on('joined', ({ color, opponentEmblem }) => startOnlineMatch(color, opponentEmblem));
   room.on('error', (msg) => {
     errorEl.textContent = msg.message ?? 'Erro ao entrar na sala.';
     leaveOnlineRoom();
   });
-  room.joinRoom(code);
+  room.joinRoom(code, settings.myEmblem);
 }
 
-function startOnlineMatch(color) {
-  launchMatch(createStandardBoard(), false, { online: { room, color } });
+function startOnlineMatch(color, opponentEmblem) {
+  const foe = color === WHITE ? BLACK : WHITE;
+  const emblems = { [color]: validEmblem(settings.myEmblem), [foe]: validEmblem(opponentEmblem, foe === WHITE ? 'aguia' : 'lobo') };
+  launchMatch(createStandardBoard(), false, { online: { room, color }, emblems });
 }
 
 function showOnlineBanner(text) {
@@ -561,7 +671,7 @@ function wireOnlineHandlers(online, game) {
       .find((m) => m.to.row === raw.to.row && m.to.col === raw.to.col);
     if (!legal) return;
     if (raw.promotionType) legal.promotionType = raw.promotionType;
-    gameView?._playMove(legal, { remote: true });
+    gameView?.playRemoteMove(legal);
   });
 
   online.room.on('chat', (msg) => {
@@ -584,14 +694,18 @@ async function launchMatch(board, withReveal, opts = {}) {
   await preloadPieceModels();
 
   audio.startMusic();
-  audio.startAmbience(settings.weather);
+  audio.startAmbience(settings.weather, getTheme(settings.theme).ambience);
 
   const game = new ChessGame(board);
   const clock = createClock(settings.clockMinutes);
   onlineColor = online?.color ?? null;
+  matchEmblems = opts.emblems ?? { ...settings.emblems };
   gameView = new GameView(canvasContainer, game, {
     clock,
     onlineColor,
+    weather: settings.weather,
+    theme: settings.theme,
+    emblems: matchEmblems,
     onStatusChange: handleStatusChange,
     onPromotionNeeded: askPromotion,
     onHoverPiece: showVeteranTooltip,
@@ -613,14 +727,29 @@ async function launchMatch(board, withReveal, opts = {}) {
   });
 
   if (online) wireOnlineHandlers(online, game);
+  // Camadas sobre o canvas (não somem quando a tela de Opções limpa a interface).
+  herald = createHerald({ root: canvasContainer, events: gameView.events });
+  tension = createTension({ root: canvasContainer, events: gameView.events, onlineColor });
 
   if (withReveal) await gameView.playRevealAnimation();
 
-  // Corneta de guerra: o combate começa oficialmente aqui.
-  await gameView.playBattleStart();
-  if (!gameView) return;
+  // Abertura: revelação de escala do campo de batalha, com botão de pular.
+  if (settings.intro && gameView) {
+    const view = gameView;
+    const skip = createSkipButton();
+    await view.playOpening({ isSkipped: () => skip.skipped });
+    skip.remove();
+    if (gameView !== view) return;
+  }
 
-  gameView.startClock();
+  // Corneta de guerra: o combate começa oficialmente aqui.
+  const view = gameView;
+  if (!view) return;
+  await view.playBattleStart();
+  if (gameView !== view) return;
+
+  view.startClock();
+  tension?.begin(view.game);
 
   // Expõe o estado para depuração no console do navegador.
   window.xadrez = {
@@ -629,6 +758,33 @@ async function launchMatch(board, withReveal, opts = {}) {
     audio,
     testarCaptura: createCaptureTester(() => window.xadrez),
     velocidade: setDebugSpeed,
+  };
+}
+
+// Botão "Pular" da abertura (Esc ou espaço também pulam).
+function createSkipButton() {
+  const button = document.createElement('button');
+  button.className = 'btn btn-ghost btn-small skip-intro panel';
+  button.type = 'button';
+  button.textContent = 'Pular ▸▸';
+  const state = { skipped: false };
+  const skip = () => {
+    state.skipped = true;
+  };
+  const onKey = (event) => {
+    if (event.key === 'Escape' || event.key === ' ') skip();
+  };
+  button.onclick = skip;
+  window.addEventListener('keydown', onKey);
+  uiRoot.appendChild(button);
+  return {
+    get skipped() {
+      return state.skipped;
+    },
+    remove() {
+      window.removeEventListener('keydown', onKey);
+      button.remove();
+    },
   };
 }
 
@@ -795,10 +951,33 @@ function showVictory(result) {
   const headline = isDraw ? 'Empate' : `${TEAM_NAME[result.winner]} vence`;
   const sub = KIND_TITLE[result.kind] ?? 'Fim de partida';
 
+  // Progresso: registrado uma vez só (a tela volta depois do replay).
+  if (!result.recorded) {
+    result.recorded = true;
+    const local = onlineColor;
+    const foe = local === WHITE ? BLACK : WHITE;
+    const captured = game.captured;
+    result.unlocked = recordMatch({
+      winner: result.winner,
+      titles,
+      kind: result.kind,
+      theme: settings.theme,
+      countsAsWin: !!result.winner && (!local || result.winner === local),
+      localCaptures: local
+        ? game.history.filter((m) => m.color === local && m.captured).length
+        : game.history.filter((m) => m.captured).length,
+      localQueensTaken: local
+        ? (captured[foe] ?? []).filter((t) => t === 'q').length
+        : [...captured.w, ...captured.b].filter((t) => t === 'q').length,
+    });
+  }
+  const emblemId = result.winner ? matchEmblems?.[result.winner] : null;
+
   const overlay = document.createElement('div');
   overlay.className = `victory-overlay panel ${isDraw ? 'is-draw' : `team-${result.winner}`}`;
   overlay.innerHTML = `
     <div class="victory-card">
+      ${emblemId ? `<div class="victory-emblem team-${result.winner}">${emblemSvg(emblemId, { size: 96 })}</div>` : ''}
       <p class="victory-kind">${sub}</p>
       <h1 class="victory-headline">${headline}</h1>
       ${
@@ -808,6 +987,13 @@ function showVictory(result) {
                 (t) =>
                   `<div class="victory-title"><span class="vt-icon">${t.icon}</span><span class="vt-body"><strong>${t.name}</strong><em>${t.desc}</em></span></div>`,
               )
+              .join('')}</div>`
+          : ''
+      }
+      ${
+        result.unlocked?.length
+          ? `<div class="victory-unlocks">${result.unlocked
+              .map((skin) => `<div class="unlock-chip">🔓 Nova skin: <strong>${skin.name}</strong></div>`)
               .join('')}</div>`
           : ''
       }

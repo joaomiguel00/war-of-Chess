@@ -8,6 +8,7 @@ export function createAudioEngine() {
   let musicBus = null;
   let sfxBus = null;
   let ambienceBus = null;
+  let mixFilter = null;
   let noiseBuffer = null;
   const samples = new Map();
   let loading = Promise.resolve();
@@ -69,16 +70,23 @@ export function createAudioEngine() {
       limiter.attack.value = 0.003;
       limiter.release.value = 0.2;
       master.connect(limiter).connect(ctx.destination);
+      // Todos os sons do jogo passam por este filtro antes do volume geral:
+      // é ele que "abafa o mundo" no zumbido pós-impacto.
+      mixFilter = ctx.createBiquadFilter();
+      mixFilter.type = 'lowpass';
+      mixFilter.frequency.value = 22000;
+      mixFilter.Q.value = 0.7;
+      mixFilter.connect(master);
       musicBus = ctx.createGain();
       musicBus.gain.value = 0.55;
-      musicBus.connect(master);
+      musicBus.connect(mixFilter);
       sfxBus = ctx.createGain();
       sfxBus.gain.value = 1;
-      sfxBus.connect(master);
+      sfxBus.connect(mixFilter);
       // Ambiente (vento, corvos, fogueira, trovão): barramento próprio, baixo.
       ambienceBus = ctx.createGain();
       ambienceBus.gain.value = 0.8;
-      ambienceBus.connect(master);
+      ambienceBus.connect(mixFilter);
       noiseBuffer = createNoiseBuffer();
       applyVolume();
       loading = loadManifest();
@@ -120,8 +128,37 @@ export function createAudioEngine() {
     return true;
   }
 
+  // Zumbido: o mundo inteiro fica abafado por ~`seconds` e um apito agudo e
+  // fraco toca por cima (fora do filtro, mas ainda no volume geral).
+  function muffle(seconds = 1.6) {
+    if (!ctx || !mixFilter) return;
+    const now = ctx.currentTime;
+    const f = mixFilter.frequency;
+    f.cancelScheduledValues(now);
+    f.setValueAtTime(Math.max(300, f.value), now);
+    f.exponentialRampToValueAtTime(340, now + 0.05);
+    f.setValueAtTime(340, now + seconds * 0.35);
+    f.exponentialRampToValueAtTime(22000, now + seconds);
+
+    const ring = ctx.createGain();
+    ring.gain.setValueAtTime(0.0001, now);
+    ring.gain.exponentialRampToValueAtTime(0.022, now + 0.08);
+    ring.gain.setValueAtTime(0.022, now + seconds * 0.4);
+    ring.gain.exponentialRampToValueAtTime(0.0001, now + seconds * 1.05);
+    ring.connect(master);
+    for (const freq of [3520, 3534]) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      osc.connect(ring);
+      osc.start(now);
+      osc.stop(now + seconds * 1.1);
+    }
+  }
+
   return {
     unlock,
+    muffle,
     playSample,
     // Resolve quando os arquivos do manifesto (se houver) terminaram de carregar.
     whenLoaded: () => loading,

@@ -29,8 +29,15 @@ export function setDebugSpeed(value) {
   debugSpeed = Math.max(0.01, Number(value) || 1);
 }
 
+// Velocidade da cena (câmera lenta de "última resistência"): multiplica
+// tudo o que é ação, sem mexer na câmera lenta de captura.
+let sceneSpeed = 1;
+export function setSceneSpeed(value) {
+  sceneSpeed = Math.max(0.1, value);
+}
+
 function scaleAt(now) {
-  return (now < freezeUntil ? FROZEN_SCALE : timeScale) * debugSpeed;
+  return (now < freezeUntil ? FROZEN_SCALE : timeScale) * debugSpeed * sceneSpeed;
 }
 
 // Executa uma animação por quadro; resolve quando termina.

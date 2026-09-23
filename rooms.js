@@ -18,6 +18,11 @@ function send(ws, payload) {
   if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(payload));
 }
 
+// Emblema escolhido pelo jogador: só um identificador curto de letras.
+function cleanEmblem(value) {
+  return String(value ?? '').replace(/[^a-z]/g, '').slice(0, 12);
+}
+
 function opponentOf(room, color) {
   return color === 'w' ? room.b : room.w;
 }
@@ -59,6 +64,7 @@ export function createRoomServer(wss) {
           room[color] = ws;
           rooms.set(code, room);
           ws.roomInfo = { code, color };
+          ws.emblem = cleanEmblem(msg.emblem);
           send(ws, { type: 'created', code, color });
           break;
         }
@@ -77,8 +83,10 @@ export function createRoomServer(wss) {
           }
           room[color] = ws;
           ws.roomInfo = { code, color };
-          send(ws, { type: 'joined', code, color });
-          send(opponentOf(room, color), { type: 'opponent-joined' });
+          ws.emblem = cleanEmblem(msg.emblem);
+          const creator = opponentOf(room, color);
+          send(ws, { type: 'joined', code, color, opponentEmblem: creator?.emblem ?? '' });
+          send(creator, { type: 'opponent-joined', opponentEmblem: ws.emblem });
           break;
         }
         case 'move':
