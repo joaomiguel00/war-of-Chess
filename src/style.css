@@ -1048,3 +1048,63 @@ h3,
     font-size: 34px;
   }
 }
+
+/* ---------------------------------------------------- multiplayer online */
+
+.room-code {
+  margin: 0 0 18px;
+  padding: 14px;
+  border: 1px solid var(--gold);
+  background: rgba(201, 162, 75, 0.08);
+  font-family: 'Cinzel', serif;
+  font-size: 40px;
+  letter-spacing: 0.3em;
+  color: var(--gold-bright);
+  text-shadow: 0 0 24px rgba(201, 162, 75, 0.4);
+}
+
+.join-form {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.join-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--stroke);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-family: 'Cinzel', serif;
+  font-size: 20px;
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.join-form input:focus {
+  outline: none;
+  border-color: var(--gold);
+}
+
+.online-error {
+  min-height: 20px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--danger);
+}
+
+.online-banner {
+  position: absolute;
+  top: 74px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  padding: 8px 16px;
+  border: 1px solid var(--danger);
+  background: var(--panel);
+  color: var(--danger);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}

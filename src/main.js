@@ -6,6 +6,7 @@ import { GameView } from './three/gameView.js';
 import { preloadPieceModels } from './three/pieceGLB.js';
 import { renderSetupUI } from './ui/setupUI.js';
 import { createChat } from './ui/chat.js';
+import { createRoomClient } from './net/room.js';
 import { createClock, formatClock } from './clock.js';
 import { computeTitles } from './achievements.js';
 import { settings, setSetting } from './settings.js';
@@ -23,6 +24,8 @@ const TEAM_NAME = {
 let gameView = null;
 let chat = null;
 let customBoards = { [WHITE]: null, [BLACK]: null };
+let room = null;
+let onlineColor = null;
 
 const teamName = (color) => (color === WHITE ? 'Ordem' : 'Ruína');
 
@@ -44,9 +47,20 @@ function destroyMatch() {
   canvasContainer.style.display = 'none';
 }
 
+// Sai de verdade do multiplayer online: fecha a conexão com o servidor.
+// Chamado só ao voltar pro menu principal — nunca entre a sala e a partida.
+function leaveOnlineRoom() {
+  if (room) {
+    room.dispose();
+    room = null;
+  }
+  onlineColor = null;
+}
+
 /* ---------------------------------------------------------------- menus */
 
 function showStartMenu() {
+  leaveOnlineRoom();
   destroyMatch();
   resetUI();
   uiRoot.innerHTML = `
@@ -64,6 +78,10 @@ function showStartMenu() {
             <strong>Montagem Customizada</strong>
             <span>Escolha sua cor e posicione o exército em segredo, em até 3 fileiras</span>
           </button>
+          <button class="btn btn-secondary" id="btn-online">
+            <strong>Jogar Online</strong>
+            <span>Crie ou entre numa sala — cada jogador no seu dispositivo</span>
+          </button>
         </div>
         <button class="btn btn-ghost btn-wide" id="btn-options">Opções</button>
       </div>
@@ -72,6 +90,7 @@ function showStartMenu() {
 
   uiRoot.querySelector('#btn-standard').onclick = () => launchMatch(createStandardBoard(), false);
   uiRoot.querySelector('#btn-custom').onclick = startCustomFlow;
+  uiRoot.querySelector('#btn-online').onclick = showOnlineMenu;
   uiRoot.querySelector('#btn-options').onclick = () => showOptions(showStartMenu);
 }
 
@@ -315,9 +334,223 @@ function showReveal(board) {
   setTimeout(() => launchMatch(board, true), 900);
 }
 
+/* ---------------------------------------------------- multiplayer online */
+
+function showOnlineMenu() {
+  resetUI();
+  uiRoot.innerHTML = `
+    <div class="screen intro-screen">
+      <div class="start-card">
+        <p class="eyebrow">Multiplayer online</p>
+        <h2>Jogar Online</h2>
+        <p class="subtitle">Cada jogador entra do seu próprio dispositivo, conectados pela sala.</p>
+        <div class="menu-buttons">
+          <button class="btn btn-primary" id="btn-online-create">
+            <strong>Criar Sala</strong>
+            <span>Gere um código e espere o adversário entrar</span>
+          </button>
+          <button class="btn btn-secondary" id="btn-online-join">
+            <strong>Entrar em Sala</strong>
+            <span>Digite o código que o outro jogador te passou</span>
+          </button>
+        </div>
+        <button class="btn btn-ghost btn-wide" id="btn-online-back">Voltar</button>
+      </div>
+    </div>
+  `;
+  uiRoot.querySelector('#btn-online-create').onclick = showOnlineColorPick;
+  uiRoot.querySelector('#btn-online-join').onclick = showJoinRoom;
+  uiRoot.querySelector('#btn-online-back').onclick = showStartMenu;
+}
+
+function showOnlineColorPick() {
+  resetUI();
+  uiRoot.innerHTML = `
+    <div class="screen intro-screen">
+      <div class="start-card">
+        <p class="eyebrow">Criar sala · escolha seu exército</p>
+        <h2>Qual cor você comanda?</h2>
+        <div class="menu-buttons color-pick">
+          <button class="btn btn-primary" id="btn-online-white">
+            <strong>Ordem (Brancas)</strong>
+            <span>Você move primeiro</span>
+          </button>
+          <button class="btn btn-secondary" id="btn-online-black">
+            <strong>Ruína (Pretas)</strong>
+            <span>Você move em segundo</span>
+          </button>
+        </div>
+        <button class="btn btn-ghost btn-wide" id="btn-online-cancel">Voltar</button>
+      </div>
+    </div>
+  `;
+  uiRoot.querySelector('#btn-online-white').onclick = () => createOnlineRoom(WHITE);
+  uiRoot.querySelector('#btn-online-black').onclick = () => createOnlineRoom(BLACK);
+  uiRoot.querySelector('#btn-online-cancel').onclick = showOnlineMenu;
+}
+
+function showOnlineConnecting(message) {
+  resetUI({ interactive: false });
+  uiRoot.innerHTML = `
+    <div class="screen intro-screen">
+      <div class="start-card">
+        <p class="eyebrow">${message}</p>
+        <h2>Conectando ao servidor…</h2>
+      </div>
+    </div>
+  `;
+}
+
+function showOnlineError(message, onBack) {
+  resetUI();
+  uiRoot.innerHTML = `
+    <div class="screen intro-screen">
+      <div class="start-card">
+        <p class="eyebrow">Não deu certo</p>
+        <h2>${message || 'Erro na conexão online.'}</h2>
+        <button class="btn btn-primary btn-wide" id="btn-online-retry">Voltar</button>
+      </div>
+    </div>
+  `;
+  uiRoot.querySelector('#btn-online-retry').onclick = onBack;
+}
+
+async function createOnlineRoom(color) {
+  showOnlineConnecting('Criando sala');
+  room = createRoomClient();
+  try {
+    await room.connect();
+  } catch (err) {
+    room = null;
+    showOnlineError(err.message, showOnlineMenu);
+    return;
+  }
+  room.on('created', ({ code }) => showWaitingRoom(code, color));
+  room.on('opponent-joined', () => startOnlineMatch(color));
+  room.on('error', (msg) => showOnlineError(msg.message, showOnlineMenu));
+  room.createRoom(color);
+}
+
+function showWaitingRoom(code, color) {
+  resetUI();
+  uiRoot.innerHTML = `
+    <div class="screen intro-screen team-${color}">
+      <div class="start-card">
+        <p class="eyebrow">Sala criada</p>
+        <h2>Compartilhe o código</h2>
+        <div class="room-code" id="room-code">${code}</div>
+        <button class="btn btn-secondary btn-wide" id="btn-copy-code">Copiar código</button>
+        <p class="subtitle">Aguardando o adversário entrar…</p>
+        <button class="btn btn-ghost btn-wide" id="btn-online-cancel">Cancelar</button>
+      </div>
+    </div>
+  `;
+  uiRoot.querySelector('#btn-copy-code').onclick = async () => {
+    const button = uiRoot.querySelector('#btn-copy-code');
+    try {
+      await navigator.clipboard.writeText(code);
+      if (button) {
+        button.textContent = 'Copiado!';
+        setTimeout(() => {
+          if (button) button.textContent = 'Copiar código';
+        }, 1500);
+      }
+    } catch {
+      // Sem acesso à área de transferência — o código já está visível na tela.
+    }
+  };
+  uiRoot.querySelector('#btn-online-cancel').onclick = () => {
+    leaveOnlineRoom();
+    showOnlineMenu();
+  };
+}
+
+function showJoinRoom() {
+  resetUI();
+  uiRoot.innerHTML = `
+    <div class="screen intro-screen">
+      <div class="start-card">
+        <p class="eyebrow">Entrar em sala</p>
+        <h2>Digite o código</h2>
+        <form class="join-form" id="join-form" autocomplete="off">
+          <input id="join-code" type="text" maxlength="5" placeholder="ABCDE" autocapitalize="characters" />
+          <button type="submit" class="btn btn-primary">Entrar</button>
+        </form>
+        <p class="online-error" id="join-error"></p>
+        <button class="btn btn-ghost btn-wide" id="btn-online-cancel">Voltar</button>
+      </div>
+    </div>
+  `;
+  const errorEl = uiRoot.querySelector('#join-error');
+  const codeInput = uiRoot.querySelector('#join-code');
+  uiRoot.querySelector('#join-form').onsubmit = (event) => {
+    event.preventDefault();
+    const code = codeInput.value.trim().toUpperCase();
+    if (!code) return;
+    errorEl.textContent = '';
+    joinOnlineRoom(code, errorEl);
+  };
+  uiRoot.querySelector('#btn-online-cancel').onclick = showOnlineMenu;
+}
+
+async function joinOnlineRoom(code, errorEl) {
+  room = createRoomClient();
+  try {
+    await room.connect();
+  } catch (err) {
+    room = null;
+    errorEl.textContent = err.message;
+    return;
+  }
+  room.on('joined', ({ color }) => startOnlineMatch(color));
+  room.on('error', (msg) => {
+    errorEl.textContent = msg.message ?? 'Erro ao entrar na sala.';
+    leaveOnlineRoom();
+  });
+  room.joinRoom(code);
+}
+
+function startOnlineMatch(color) {
+  launchMatch(createStandardBoard(), false, { online: { room, color } });
+}
+
+function showOnlineBanner(text) {
+  const banner = document.createElement('div');
+  banner.className = 'online-banner panel';
+  banner.textContent = text;
+  uiRoot.appendChild(banner);
+  setTimeout(() => banner.remove(), 5000);
+}
+
+// Repassa lances e chat recebidos da rede pro jogo local. O servidor não
+// valida o xadrez, então aqui a gente sempre confere o lance recebido contra
+// os lances legais de verdade antes de aplicar — nunca confia no payload cru.
+function wireOnlineHandlers(online, game) {
+  const opponentColor = online.color === WHITE ? BLACK : WHITE;
+
+  online.room.on('move', (msg) => {
+    const raw = msg.move;
+    if (!raw?.from || !raw?.to) return;
+    const legal = game
+      .getLegalMoves(raw.from.row, raw.from.col)
+      .find((m) => m.to.row === raw.to.row && m.to.col === raw.to.col);
+    if (!legal) return;
+    if (raw.promotionType) legal.promotionType = raw.promotionType;
+    gameView?._playMove(legal, { remote: true });
+  });
+
+  online.room.on('chat', (msg) => {
+    chat?.receiveRemote(opponentColor, msg.text ?? '');
+  });
+
+  online.room.on('opponent-left', () => showOnlineBanner('O adversário saiu da sala.'));
+  online.room.on('closed', () => showOnlineBanner('Conexão perdida com o servidor.'));
+}
+
 /* --------------------------------------------------------------- partida */
 
-async function launchMatch(board, withReveal) {
+async function launchMatch(board, withReveal, opts = {}) {
+  const online = opts.online ?? null;
   destroyMatch();
   resetUI({ interactive: false });
   canvasContainer.style.display = 'block';
@@ -329,8 +562,10 @@ async function launchMatch(board, withReveal) {
 
   const game = new ChessGame(board);
   const clock = createClock(settings.clockMinutes);
+  onlineColor = online?.color ?? null;
   gameView = new GameView(canvasContainer, game, {
     clock,
+    onlineColor,
     onStatusChange: handleStatusChange,
     onPromotionNeeded: askPromotion,
     onHoverPiece: showVeteranTooltip,
@@ -339,11 +574,19 @@ async function launchMatch(board, withReveal) {
     onReplayStart: () => showReplayOverlay(true),
     onReplayCaption: setReplayCaption,
     onReplayEnd: () => showReplayOverlay(false),
+    onLocalMove: online ? (entry) => online.room.sendMove(entry) : undefined,
   });
-  gameView.focusOnSide(game.turn);
+  gameView.focusOnSide(online ? online.color : game.turn);
 
   renderHUD(game);
-  chat = createChat({ root: uiRoot, getTurn: () => game.turn, teamName });
+  chat = createChat({
+    root: uiRoot,
+    getTurn: online ? () => online.color : () => game.turn,
+    teamName,
+    onSend: online ? (_color, text) => online.room.sendChat(text) : undefined,
+  });
+
+  if (online) wireOnlineHandlers(online, game);
 
   if (withReveal) await gameView.playRevealAnimation();
 

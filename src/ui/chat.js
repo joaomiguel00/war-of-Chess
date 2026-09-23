@@ -3,11 +3,13 @@ import { WHITE } from '../chess/moveGen.js';
 const QUICK = ['Boa jogada!', 'kkk', 'GG', 'Cuidado!', '😱', '🔥', '👏', '🤝'];
 const MAX_LOG = 40;
 
-// Chat local de mesa (hot-seat): reações rápidas, texto curto, balão temporário
-// sobre o lado de quem falou e uma lista rolável. Sem servidor — os dois
-// jogadores compartilham a mesma tela.
-// getTurn() informa a cor de quem está jogando, usada para colorir/posicionar.
-export function createChat({ root, getTurn, teamName }) {
+// Chat: reações rápidas, texto curto, balão temporário sobre o lado de quem
+// falou e uma lista rolável. No hot-seat os dois jogadores compartilham a
+// mesma tela; online, cada mensagem enviada localmente também sai por
+// onSend(color, texto), e a do adversário chega via receiveRemote().
+// getTurn() informa a cor de quem está "falando" (o turno no hot-seat, a cor
+// travada do jogador local no online).
+export function createChat({ root, getTurn, teamName, onSend }) {
   const wrap = document.createElement('div');
   wrap.className = 'chat panel';
   wrap.innerHTML = `
@@ -48,8 +50,17 @@ export function createChat({ root, getTurn, teamName }) {
     const color = getTurn?.() ?? WHITE;
     addToLog(color, clean);
     spawnBubble(color, clean);
+    onSend?.(color, clean);
     input.value = '';
     input.focus();
+  }
+
+  // Mensagem vinda do adversário online: só exibe, não reenvia pela rede.
+  function receiveRemote(color, text) {
+    const clean = String(text ?? '').trim().slice(0, 80);
+    if (!clean) return;
+    addToLog(color, clean);
+    spawnBubble(color, clean);
   }
 
   function addToLog(color, text) {
@@ -97,5 +108,5 @@ export function createChat({ root, getTurn, teamName }) {
     bubbles.remove();
   }
 
-  return { dispose, send };
+  return { dispose, send, receiveRemote };
 }

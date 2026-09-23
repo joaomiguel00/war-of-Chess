@@ -1,9 +1,12 @@
-// Servidor estático sem dependências para deploy (Railway, Render, etc.):
-// serve o build de produção (dist/) na porta da variável PORT.
+// Servidor do War of Chess: serve o build de produção (dist/) e, no mesmo
+// processo/porta, um WebSocket de salas para o multiplayer online (criar
+// sala, entrar com código, repassar lances e chat entre os dois jogadores).
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { WebSocketServer } from 'ws';
+import { createRoomServer } from './rooms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
@@ -75,6 +78,18 @@ const server = http.createServer((req, res) => {
     }
     fs.createReadStream(file).pipe(res);
   });
+});
+
+// WebSocket das salas, só em /ws (o resto continua HTTP normal acima).
+const wss = new WebSocketServer({ noServer: true });
+createRoomServer(wss);
+server.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url, 'http://localhost');
+  if (pathname !== '/ws') {
+    socket.destroy();
+    return;
+  }
+  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
 });
 
 server.listen(PORT, '0.0.0.0', () => {

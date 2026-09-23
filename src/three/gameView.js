@@ -47,6 +47,9 @@ export class GameView {
     this.initialBoard = cloneBoard(game.board);
     // Relógio opcional, fornecido por quem cria a partida.
     this.clock = callbacks.clock ?? null;
+    // Multiplayer online: quando definido, só aceita clique nas peças dessa
+    // cor e no seu turno, e a câmera fica fixa no lado do jogador local.
+    this.onlineColor = callbacks.onlineColor ?? null;
     this.replaying = false;
     this._replayPromotion = 'q';
     this._musicPhase = null;
@@ -344,6 +347,8 @@ export class GameView {
   _onClick(event) {
     if (this.busy || this.disposed || this.replaying || this.game.isGameOver()) return;
     if (event.button !== undefined && event.button !== 0) return;
+    // Online: só mexe nas próprias peças, e só no seu turno.
+    if (this.onlineColor && this.onlineColor !== this.game.turn) return;
 
     const square = this._squareAtPointer(event);
     if (square) this._handleSquareClick(square.row, square.col);
@@ -386,7 +391,7 @@ export class GameView {
     }
   }
 
-  async _playMove(move) {
+  async _playMove(move, { remote = false } = {}) {
     this.busy = true;
     this.selected = null;
     this.legalMoves = [];
@@ -394,9 +399,10 @@ export class GameView {
 
     let promotionType;
     if (move.promotion) {
-      promotionType = this.replaying
-        ? this._replayPromotion
-        : await this.callbacks.onPromotionNeeded?.(move);
+      // Lance vindo da rede ou do replay já chega com a escolha decidida.
+      if (move.promotionType) promotionType = move.promotionType;
+      else if (this.replaying) promotionType = this._replayPromotion;
+      else promotionType = await this.callbacks.onPromotionNeeded?.(move);
       if (!promotionType) promotionType = 'q';
     }
 
@@ -472,6 +478,12 @@ export class GameView {
 
     this.game.makeMove(move, promotionType);
 
+    // Lance local numa partida online: manda pro adversário exatamente o
+    // registro que o próprio jogo guardou (já com a promoção decidida).
+    if (this.onlineColor && !remote && !this.replaying) {
+      this.callbacks.onLocalMove?.(this.game.history[this.game.history.length - 1]);
+    }
+
     // A peça que capturou vira veterana e ganha um entalhe na base.
     if (victimPiece) {
       const survivor = this.game.board[move.to.row][move.to.col];
@@ -542,7 +554,9 @@ export class GameView {
       }
     } else if (!this.replaying) {
       this.clock?.switchTo(this.game.turn);
-      await this.cameraRig.rotateToSide(this.game.turn);
+      // Online cada jogador está no seu próprio dispositivo: a câmera fica
+      // fixa do seu lado, em vez de girar a cada turno como no hot-seat.
+      if (!this.onlineColor) await this.cameraRig.rotateToSide(this.game.turn);
     }
 
     this.busy = false;
